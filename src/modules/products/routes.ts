@@ -1,0 +1,108 @@
+import { Router } from 'express';
+import { authenticate } from '../auth/middleware';
+import { requirePermission } from '../rbac/authz';
+import { db } from '../../database/client';
+import { organizationProducts, products } from '../../database/schema/core';
+import { and, eq } from 'drizzle-orm';
+import { z } from 'zod';
+import { validate } from '../../middleware/validate';
+import { recordAudit } from '../audit/service';
+
+const createProductSchema = z.object({
+  name: z.string().min(2),
+  code: z.string().regex(/^[A-Z0-9_]+$/),
+  description: z.string().optional(),
+  active: z.boolean().optional(),
+});
+
+const assignSchema = z.object({
+  organizationId: z.string().uuid(),
+  productCode: z.string().regex(/^[A-Z0-9_]+$/),
+  status: z.enum(['active', 'inactive']).default('active'),
+});
+
+const router = Router();
+
+router.get('/products', authenticate, async (req, res) => {
+  const auth = (req as any).auth;
+  requirePermission(auth, 'platform.manage');
+  const rows = await db.select().from(products);
+  return res.json(rows);
+});
+
+router.post('/products', authenticate, validate(createProductSchema), async (req, res) => {
+  const auth = (req as any).auth;
+  requirePermission(auth, 'platform.manage');
+  const body = req.body as any;
+  try {
+    const [row] = await db.insert(products).values(body).returning();
+    await recordAudit({
+      actorUserId: auth.userId,
+      action: 'product.created',
+      resourceType: 'product',
+      resourceId: row.id,
+      metadata: { code: row.code },
+    });
+    return res.status(201).json(row);
+  } catch (e: any) {
+    return res
+      .status(409)
+      .json({ error: { code: 'PRODUCT_CODE_EXISTS', message: 'Product code must be unique' } });
+  }
+});
+
+router.post('/products/assign', authenticate, validate(assignSchema), async (req, res) => {
+  const auth = (req as any).auth;
+  requirePermission(auth, 'platform.manage');
+  const body = req.body as {
+    organizationId: string;
+    productCode: string;
+    status: 'active' | 'inactive';
+  };
+  const [p] = await db.select().from(products).where(eq(products.code, body.productCode)).limit(1);
+  if (!p)
+    return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Product not found' } });
+  if (!p.active && body.status === 'active')
+    return res
+      .status(400)
+      .json({ error: { code: 'PRODUCT_INACTIVE', message: 'Cannot activate inactive product' } });
+  const ins = db
+    .insert(organizationProducts)
+    .values({ organizationId: body.organizationId, productId: p.id, status: body.status });
+  // If supported, avoid duplicate error on repeat assignment
+  const inserted = (ins as any).onConflictDoNothing
+    ? await (ins as any)
+        .onConflictDoNothing({
+          target: [organizationProducts.organizationId, organizationProducts.productId],
+        })
+        .returning()
+    : await ins.returning();
+  let row = inserted[0];
+  if (!row) {
+    const existing = await db
+      .select()
+      .from(organizationProducts)
+      .where(
+        and(
+          eq(organizationProducts.organizationId, body.organizationId),
+          eq(organizationProducts.productId, p.id)
+        )
+      )
+      .limit(1);
+    row = existing[0];
+  }
+  await recordAudit({
+    actorUserId: auth.userId,
+    action: 'product.assigned',
+    resourceType: 'organization_product',
+    resourceId: `${body.organizationId}:${p.id}`,
+    metadata: {
+      organizationId: body.organizationId,
+      productCode: body.productCode,
+      status: body.status,
+    },
+  });
+  return res.status(201).json(row);
+});
+
+export default router;

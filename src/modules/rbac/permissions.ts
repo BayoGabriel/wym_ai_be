@@ -1,0 +1,29 @@
+export const PERMISSIONS = {
+  'organization.read': 'organization.read',
+  'organization.create': 'organization.create',
+  'organization.update': 'organization.update',
+  'organization.suspend': 'organization.suspend',
+  'user.read': 'user.read',
+  'user.create': 'user.create',
+  'user.update': 'user.update',
+  'user.suspend': 'user.suspend',
+  'role.read': 'role.read',
+  'permission.read': 'permission.read',
+  'conversation.read': 'conversation.read',
+  'conversation.create': 'conversation.create',
+  'conversation.update': 'conversation.update',
+  'conversation.message.create': 'conversation.message.create',
+  'lead.read': 'lead.read',
+  'lead.write': 'lead.write',
+  'handoff.read': 'handoff.read',
+  'handoff.write': 'handoff.write',
+  'handoff.assign': 'handoff.assign',
+  'knowledge.read': 'knowledge.read',
+  'knowledge.write': 'knowledge.write',
+  'appointment.read': 'appointment.read',
+  'report.read': 'report.read',
+  'platform.manage': 'platform.manage',
+} as const;
+
+export type PermissionKey = keyof typeof PERMISSIONS;
+export type PermissionValue = (typeof PERMISSIONS)[PermissionKey];
