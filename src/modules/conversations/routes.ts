@@ -1,3 +1,4 @@
+import { AuthContext } from '../../types/auth';
 import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate } from '../auth/middleware';
 import { requirePermission } from '../rbac/authz';
@@ -29,11 +30,11 @@ function handle(fn: (req: Request, res: Response, next: NextFunction) => Promise
 
 router.use(authenticate);
 
-async function ensureAssistEntitlement(auth: any) {
+async function ensureAssistEntitlement(auth: AuthContext) {
   const ok =
     auth.organizationId && (await organizationHasProduct(auth.organizationId, 'WYMASSIST'));
   if (!ok) {
-    const err: any = new Error('Forbidden: WYMASSIST not entitled');
+    const err: Error & { status?: number; code?: string } = new Error('Forbidden: WYMASSIST not entitled');
     err.status = 403;
     err.code = 'FORBIDDEN';
     throw err;
@@ -44,7 +45,7 @@ router.post(
   '/conversations',
   validate(createConversationSchema),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'conversation.create');
     await ensureAssistEntitlement(auth);
 
@@ -72,7 +73,7 @@ router.get(
   '/conversations',
   validate(listConversationsQuerySchema, 'query'),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'conversation.read');
     await ensureAssistEntitlement(auth);
 
@@ -97,7 +98,7 @@ router.get(
 router.get(
   '/conversations/:id',
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'conversation.read');
     await ensureAssistEntitlement(auth);
 
@@ -110,7 +111,7 @@ router.patch(
   '/conversations/:id',
   validate(updateConversationSchema),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'conversation.update');
     await ensureAssistEntitlement(auth);
 
@@ -136,7 +137,7 @@ router.get(
   '/conversations/:id/messages',
   validate(listMessagesQuerySchema, 'query'),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'conversation.read');
     await ensureAssistEntitlement(auth);
 
@@ -155,7 +156,7 @@ router.post(
   '/conversations/:id/messages',
   validate(createMessageSchema),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'conversation.message.create');
     await ensureAssistEntitlement(auth);
 

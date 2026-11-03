@@ -1,9 +1,10 @@
+import { AuthContext } from '../../types/auth';
 import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate } from '../auth/middleware';
 import { requirePermission } from '../rbac/authz';
 import { db } from '../../database/client';
 import { knowledgeDocuments, knowledgeItems } from '../../database/schema/core';
-import { and, eq, ilike, like, or } from 'drizzle-orm';
+import { and, eq, ilike, or } from 'drizzle-orm';
 import { validate } from '../../middleware/validate';
 import {
   createTextKnowledgeSchema,
@@ -13,7 +14,7 @@ import {
 } from './validation';
 import { recordAudit } from '../audit/service';
 import { organizationHasProduct } from '../products/service';
-import { initStorage, savePdfBuffer, readPdf } from './storage';
+import { initStorage, savePdfBuffer } from './storage';
 import { env } from '../../config/env';
 import { processKnowledgeItem } from './processing/processor';
 import { embedMissingForItem } from '../retrieval/embedder';
@@ -28,11 +29,11 @@ function handle(fn: (req: Request, res: Response, next: NextFunction) => Promise
 
 router.use(authenticate);
 
-async function ensureAssistEntitlement(auth: any) {
+async function ensureAssistEntitlement(auth: AuthContext) {
   const ok =
     auth.organizationId && (await organizationHasProduct(auth.organizationId, 'WYMASSIST'));
   if (!ok) {
-    const err: any = new Error('Forbidden: WYMASSIST not entitled');
+    const err: Error & { status?: number; code?: string } = new Error('Forbidden: WYMASSIST not entitled');
     err.status = 403;
     err.code = 'FORBIDDEN';
     throw err;
@@ -43,12 +44,12 @@ router.get(
   '/knowledge',
   validate(listQuerySchema, 'query'),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.read');
     await ensureAssistEntitlement(auth);
-    const { category, sourceType, status, search, page, limit } = req.query as any;
+    const { category, sourceType, status, search, page, limit } = req.query as unknown as { category?: 'GENERAL' | 'FAQ' | 'FEATURES' | 'EVENTS'; sourceType?: 'TEXT' | 'PDF'; status?: 'DRAFT' | 'ACTIVE' | 'ARCHIVED'; search?: string; page: number; limit: number };
 
-    const whereClauses: any[] = [eq(knowledgeItems.organizationId, auth.organizationId!)];
+    const whereClauses: ReturnType<typeof eq>[] = [eq(knowledgeItems.organizationId, auth.organizationId!)];
     if (category) whereClauses.push(eq(knowledgeItems.category, category));
     if (sourceType) whereClauses.push(eq(knowledgeItems.sourceType, sourceType));
     if (status) whereClauses.push(eq(knowledgeItems.status, status));
@@ -65,15 +66,14 @@ router.get(
           and(
             ...whereClauses,
             or(
-              ilike(knowledgeItems.title as any, `%${search}%`),
-              ilike(knowledgeItems.description as any, `%${search}%`)
+              ilike(knowledgeItems.title, `%${search}%`),
+              ilike(knowledgeItems.description, `%${search}%`)
             )
           )
         );
     }
     const offset = (page - 1) * limit;
-    // @ts-ignore drizzle typing for limit/offset
-    const rows = await (rowsQuery as any).limit(limit).offset(offset);
+    const rows = await rowsQuery.limit(limit).offset(offset);
     return res.json({ items: rows, page, limit });
   })
 );
@@ -82,10 +82,10 @@ router.post(
   '/knowledge',
   validate(createTextKnowledgeSchema),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
-    const body = req.body as any;
+    const body = req.body;
     const [row] = await db
       .insert(knowledgeItems)
       .values({
@@ -114,7 +114,7 @@ router.post(
 router.get(
   '/knowledge/:id',
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.read');
     await ensureAssistEntitlement(auth);
     const id = req.params.id;
@@ -135,11 +135,11 @@ router.patch(
   '/knowledge/:id',
   validate(updateKnowledgeSchema),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
     const id = req.params.id;
-    const updates = req.body as any;
+    const updates = req.body;
     const existing = await db
       .select()
       .from(knowledgeItems)
@@ -168,7 +168,7 @@ router.patch(
 router.delete(
   '/knowledge/:id',
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
     const id = req.params.id;
@@ -201,10 +201,10 @@ router.post(
   '/knowledge/documents',
   validate(uploadPdfSchema),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
-    const body = req.body as any;
+    const body = req.body;
     // Validate base64 and size
     const buf = Buffer.from(body.base64, 'base64');
     const maxBytes = env.MAX_KNOWLEDGE_DOCUMENT_SIZE_MB * 1024 * 1024;
@@ -258,7 +258,7 @@ router.post(
 router.post(
   '/knowledge/:id/process',
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
     const id = req.params.id;
@@ -298,15 +298,18 @@ router.post(
           itemId: id,
           actorUserId: auth.userId,
         });
-      } catch {}
+      } catch { /* reprocessing is best-effort here */ }
       return res.json({
         processingStatus: after.processingStatus,
         processingError: after.processingError,
       });
-    } catch (e: any) {
-      return res
-        .status(400)
-        .json({ error: { code: 'PROCESSING_FAILED', message: String(e?.message || e) } });
+    } catch (e) {
+      return res.status(400).json({
+        error: {
+          code: 'PROCESSING_FAILED',
+          message: e instanceof Error ? e.message : String(e),
+        },
+      });
     }
   })
 );

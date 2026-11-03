@@ -9,6 +9,7 @@ import {
 } from '../../database/schema/core';
 import { ApiError } from '../../middleware/error';
 import { recordAudit } from '../audit/service';
+import { notifyOrganization } from '../notifications/service';
 import type { LeadStatus } from './schemas';
 
 type LeadRow = typeof leads.$inferSelect;
@@ -34,6 +35,66 @@ export function normalizePhone(value: string) {
   return value.trim().replace(/[\s()-]/g, '');
 }
 
+export type IntakeField = {
+  key: string;
+  label: string;
+  type: 'text' | 'select' | 'checkbox';
+  required?: boolean;
+  options?: string[];
+};
+
+export function parseIntakeFields(raw: unknown): IntakeField[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (f): f is IntakeField =>
+      !!f &&
+      typeof f === 'object' &&
+      typeof (f as IntakeField).key === 'string' &&
+      typeof (f as IntakeField).label === 'string' &&
+      ['text', 'select', 'checkbox'].includes((f as IntakeField).type)
+  );
+}
+
+// Validates submitted answers against the org's configured intake fields.
+// Returns only configured keys — unknown fields are dropped, not stored.
+export function validateIntakeAnswers(
+  fields: IntakeField[],
+  answers: Record<string, unknown> | undefined
+): Record<string, string | boolean> | null {
+  if (!fields.length) return null;
+  const result: Record<string, string | boolean> = {};
+  const missing: string[] = [];
+  for (const field of fields) {
+    const value = answers?.[field.key];
+    if (value === undefined || value === null || value === '') {
+      if (field.required) missing.push(field.label);
+      continue;
+    }
+    if (field.type === 'checkbox') {
+      if (typeof value !== 'boolean') {
+        throw new ApiError(400, 'VALIDATION_ERROR', `Field "${field.label}" must be true or false`);
+      }
+      result[field.key] = value;
+      continue;
+    }
+    if (typeof value !== 'string') {
+      throw new ApiError(400, 'VALIDATION_ERROR', `Field "${field.label}" must be text`);
+    }
+    if (field.type === 'select' && field.options?.length && !field.options.includes(value)) {
+      throw new ApiError(
+        400,
+        'VALIDATION_ERROR',
+        `Field "${field.label}" must be one of the configured options`
+      );
+    }
+    result[field.key] = value;
+  }
+  if (missing.length) {
+    throw new ApiError(400, 'VALIDATION_ERROR', `Missing required fields: ${missing.join(', ')}`);
+  }
+  return Object.keys(result).length ? result : null;
+}
+
 export function toPublicLead(row: LeadRow, extra: Record<string, unknown> = {}) {
   return {
     id: row.id,
@@ -57,6 +118,7 @@ export async function captureLeadFromPublicSession(params: {
   enquiryCategory?: string;
   summary?: string;
   consentToContact?: boolean;
+  customFields?: Record<string, unknown>;
   clientRequestId?: string;
 }) {
   const [config] = await db
@@ -67,6 +129,11 @@ export async function captureLeadFromPublicSession(params: {
   if (!config?.leadCaptureEnabled) {
     throw new ApiError(403, 'LEAD_CAPTURE_DISABLED', 'Lead capture is not enabled');
   }
+
+  const customFields = validateIntakeAnswers(
+    parseIntakeFields(config.intakeFields),
+    params.customFields
+  );
 
   const email = params.email ? normalizeEmail(params.email) : undefined;
   const phone = params.phone ? normalizePhone(params.phone) : undefined;
@@ -142,6 +209,7 @@ export async function captureLeadFromPublicSession(params: {
         enquiryCategory: params.enquiryCategory ?? null,
         summary: params.summary ?? null,
         consentToContact: params.consentToContact ?? false,
+        customFields: customFields ?? null,
         clientRequestId: params.clientRequestId ?? null,
         status: 'NEW',
         source: 'PUBLIC_CHAT',
@@ -163,6 +231,12 @@ export async function captureLeadFromPublicSession(params: {
         hasPhone: !!phone,
         consentToContact: lead.consentToContact,
       },
+    });
+    await notifyOrganization({
+      organizationId: params.organizationId,
+      event: 'lead.created',
+      subject: 'New enquiry captured via WymAssist',
+      text: `A visitor shared their details${params.name ? ` (${params.name})` : ''} during a chat.`,
     });
   }
 

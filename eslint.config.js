@@ -19,4 +19,12 @@ export default [
       'no-console': ['warn', { allow: ['warn', 'error'] }],
     },
   },
+  {
+    // Test specs exercise response envelopes through supertest's `any`-typed
+    // bodies — explicit-any there is test ergonomics, not production typing.
+    files: ['src/tests/**/*.ts', 'tests/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
 ];

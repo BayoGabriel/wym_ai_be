@@ -81,10 +81,35 @@ const envSchema = z.object({
         }
       }
     }),
+  NOTIFICATION_WEBHOOK_URL: z.string().url().optional(),
+  NOTIFICATION_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
+  WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
+  WHATSAPP_ACCESS_TOKEN: z.string().min(1).optional(),
+  WHATSAPP_GRAPH_VERSION: z.string().default('v21.0'),
+  // Meta webhook verification shared by Messenger and Instagram (each Meta app
+  // webhook product can use the same verify token).
+  META_VERIFY_TOKEN: z.string().min(1).optional(),
+  META_GRAPH_VERSION: z.string().default('v21.0'),
+  MESSENGER_PAGE_ACCESS_TOKEN: z.string().min(1).optional(),
+  INSTAGRAM_PAGE_ACCESS_TOKEN: z.string().min(1).optional(),
+  // Telegram org bots authenticate by the bot token embedded in the webhook
+  // path; the shared secret below additionally requires the secret_token
+  // header Telegram sends when configured via setWebhook.
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(1).optional(),
+  TELEGRAM_API_BASE: z.string().url().default('https://api.telegram.org'),
+  // Inbound email is provider-agnostic JSON; providers authenticate with the
+  // shared secret in the x-webhook-secret header or ?secret= query param.
+  EMAIL_INBOUND_SECRET: z.string().min(1).optional(),
+  SENDGRID_API_KEY: z.string().min(1).optional(),
+  EMAIL_FROM: z.string().min(3).optional(),
+  // Outbound mail via SMTP (nodemailer). Powers user notifications and email
+  // channel replies; falls back to console logging when unset.
+  SMTP_URL: z.string().min(1).optional(),
   TRUST_PROXY: z
     .union([z.literal('true'), z.literal('false'), z.coerce.number().int().min(0)])
     .default('false')
     .transform((v) => (v === 'true' ? true : v === 'false' ? false : v)),
+  WIDGET_ASSETS_DIR: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);

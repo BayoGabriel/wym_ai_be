@@ -1,6 +1,5 @@
 import { promises as fs } from 'fs';
 import path from 'path';
-import { env } from '../../config/env';
 
 const BASE_DIR = path.resolve(process.cwd(), 'storage', 'knowledge');
 

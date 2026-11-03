@@ -13,7 +13,14 @@ import {
 import { issueTokens } from '../../modules/auth/service';
 import { PostgresRateLimitStore } from '../../modules/public/rateLimitStore';
 import { ApiError, errorHandler } from '../../middleware/error';
-import { ensureOrg, ensureUser, setAssistEntitlement } from '../utils/fixtures';
+import {
+  assignUserRole,
+  ensureOrg,
+  ensureRole,
+  ensureUser,
+  grantRolePermission,
+  setAssistEntitlement,
+} from '../utils/fixtures';
 
 type OrgRow = typeof organizations.$inferSelect;
 
@@ -63,6 +70,13 @@ describe.sequential('Phase 9.1: public chat security hardening', () => {
     orgOriginsNorm = await ensureOrg('Hardening Origins', 'hard-origins');
 
     const staff = await ensureUser('hard-staff@example.com', orgOriginsNorm.id);
+    const staffRole = await ensureRole('Hardening Staff Role', 'organization');
+    await grantRolePermission(staffRole.id, 'organization.update');
+    await assignUserRole({
+      userId: staff.id,
+      roleId: staffRole.id,
+      organizationId: orgOriginsNorm.id,
+    });
     staffToken = (
       await issueTokens({ id: staff.id, organizationId: orgOriginsNorm.id, status: 'active' })
     ).accessToken;

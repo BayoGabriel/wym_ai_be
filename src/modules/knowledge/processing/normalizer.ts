@@ -2,6 +2,7 @@ export function normalizeText(input: string): string {
   if (!input) return '';
   // Normalize newlines and whitespace; collapse more than 2 newlines into 2
   let t = input.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+  // eslint-disable-next-line no-control-regex -- intentional: VT/FF are extracted-PDF whitespace
   t = t.replace(/[\t\x0B\f\u00A0]+/g, ' ');
   // Trim lines and collapse excessive blank lines
   t = t

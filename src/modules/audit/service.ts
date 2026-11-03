@@ -9,7 +9,7 @@ export async function recordAudit(params: {
   resourceId?: string | null;
   metadata?: object | null;
 }) {
-  const payload: any = {
+  const payload: typeof auditEvents.$inferInsert = {
     organizationId: params.organizationId ?? null,
     actorUserId: params.actorUserId ?? null,
     action: params.action,

@@ -11,6 +11,7 @@ import {
 } from '../../database/schema/core';
 import { ApiError } from '../../middleware/error';
 import { recordAudit } from '../audit/service';
+import { notifyOrganization } from '../notifications/service';
 import type { HandoffStatus } from './schemas';
 
 type HandoffRow = typeof handoffs.$inferSelect;
@@ -149,6 +150,14 @@ export async function requestHandoffFromPublicSession(params: {
       resourceType: 'handoff',
       resourceId: handoff.id,
       metadata: { requestedBy: 'VISITOR', hasReason: !!params.reason },
+    });
+    await notifyOrganization({
+      organizationId: params.organizationId,
+      event: 'handoff.requested',
+      subject: 'Visitor requested a human agent',
+      text: params.reason
+        ? `A visitor asked for human assistance: ${params.reason}`
+        : 'A visitor asked for human assistance during a chat.',
     });
   }
 

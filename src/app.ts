@@ -1,3 +1,4 @@
+import path from 'path';
 import express, { Request, Response } from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
@@ -18,7 +19,13 @@ import aiRoutes from './modules/ai/routes';
 import conversationRoutes from './modules/conversations/routes';
 import leadRoutes from './modules/leads/routes';
 import handoffRoutes from './modules/handoffs/routes';
+import appointmentRoutes from './modules/appointments/routes';
+import reportRoutes from './modules/reports/routes';
+import insightRoutes from './modules/insight/routes';
+import flowRoutes from './modules/flow/routes';
+import adminRoutes from './modules/admin/routes';
 import publicAssistRoutes from './modules/public/routes';
+import channelWebhookRoutes from './modules/channels/routes';
 import { env } from './config/env';
 
 export function createApp() {
@@ -40,6 +47,16 @@ export function createApp() {
   app.use('/api/v1', routes);
   app.use('/api/v1/auth', authLimiter, authRoutes);
   app.use('/api/v1/public/assist', publicAssistRoutes);
+
+  // Embeddable widget bundle (frontend/dist-widget by default). Embed snippets
+  // point at <api-host>/widget/wymassist.js so clients need only the API origin.
+  const widgetDir = env.WIDGET_ASSETS_DIR ?? path.resolve(process.cwd(), '../frontend/dist-widget');
+  app.use('/widget', (_req, res, next) => {
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    next();
+  });
+  app.use('/widget', express.static(widgetDir, { maxAge: '1h', index: false }));
+  app.use('/api/v1/webhooks', channelWebhookRoutes);
   app.use('/api/v1/organizations', orgSettingsRoutes);
   app.use('/api/v1/organizations', orgRoutes);
   app.use('/api/v1/users', userRoutes);
@@ -52,6 +69,11 @@ export function createApp() {
   app.use('/api/v1', conversationRoutes);
   app.use('/api/v1', leadRoutes);
   app.use('/api/v1', handoffRoutes);
+  app.use('/api/v1', appointmentRoutes);
+  app.use('/api/v1', reportRoutes);
+  app.use('/api/v1', insightRoutes);
+  app.use('/api/v1', flowRoutes);
+  app.use('/api/v1/admin', adminRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

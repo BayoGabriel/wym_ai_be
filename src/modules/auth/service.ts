@@ -3,8 +3,8 @@ import jwt, { SignOptions } from 'jsonwebtoken';
 import { createHash, randomBytes } from 'crypto';
 import { env } from '../../config/env';
 import { db } from '../../database/client';
-import { refreshTokens, users } from '../../database/schema/core';
-import { eq, and, isNull } from 'drizzle-orm';
+import { refreshTokens } from '../../database/schema/core';
+import { eq, and } from 'drizzle-orm';
 
 export type Tokens = { accessToken: string; refreshToken: string };
 
@@ -13,7 +13,7 @@ function signAccessToken(payload: object): string {
     algorithm: 'HS256',
     expiresIn: env.ACCESS_TOKEN_TTL as SignOptions['expiresIn'],
   };
-  return jwt.sign(payload as any, env.JWT_ACCESS_SECRET, options);
+  return jwt.sign(payload as object, env.JWT_ACCESS_SECRET, options);
 }
 
 function signRefreshToken(): { token: string; hash: string; expiresAt: Date } {

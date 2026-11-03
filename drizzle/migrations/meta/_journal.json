@@ -64,6 +64,48 @@
       "when": 1792575736193,
       "tag": "0008_phase11_handoffs",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1793002981506,
+      "tag": "0009_phase12_appointments_intake",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793003565510,
+      "tag": "0010_phase12_channels",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1793003583970,
+      "tag": "0011_phase12_whatsapp_binding",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793005912853,
+      "tag": "0012_phase13_insight_flow",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1793541942839,
+      "tag": "0013_square_mariko_yashida",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1793543652183,
+      "tag": "0014_condemned_penance",
+      "breakpoints": true
     }
   ]
 }

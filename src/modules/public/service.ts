@@ -7,7 +7,9 @@ import {
   conversations,
   messages,
   organizations,
+  organizationSettings,
 } from '../../database/schema/core';
+import { parseIntakeFields } from '../leads/service';
 import { env } from '../../config/env';
 import { ApiError } from '../../middleware/error';
 import { recordAudit } from '../audit/service';
@@ -68,17 +70,37 @@ export function assertRequestOrigin(params: { allowedOrigins: string[]; origin?:
   }
 }
 
+// Resolve the organization for a public request — by rotatable widget key
+// (preferred) or legacy slug. Keys take precedence so a leaked key can be
+// rotated without touching slugs.
+async function resolveOrgRef(params: { organizationSlug?: string; organizationKey?: string }) {
+  if (params.organizationKey) {
+    const [byKey] = await db
+      .select()
+      .from(organizations)
+      .where(eq(organizations.publicKey, params.organizationKey))
+      .limit(1);
+    if (byKey) return byKey;
+  }
+  if (params.organizationSlug) {
+    const [bySlug] = await db
+      .select()
+      .from(organizations)
+      .where(eq(organizations.slug, params.organizationSlug))
+      .limit(1);
+    if (bySlug) return bySlug;
+  }
+  return undefined;
+}
+
 export async function createPublicChatSession(params: {
-  organizationSlug: string;
+  organizationSlug?: string;
+  organizationKey?: string;
   visitorName?: string;
   metadata?: Record<string, unknown>;
   origin?: string;
 }) {
-  const [org] = await db
-    .select()
-    .from(organizations)
-    .where(eq(organizations.slug, params.organizationSlug))
-    .limit(1);
+  const org = await resolveOrgRef(params);
 
   if (!org || org.status !== 'active') {
     throw new ApiError(404, 'NOT_FOUND', 'Assistant not available');
@@ -161,6 +183,62 @@ export async function createPublicChatSession(params: {
       id: conversation.id,
       status: conversation.status,
     },
+  };
+}
+
+// Widget-facing configuration: everything an embed needs before a session
+// exists (branding, welcome copy, enabled features, intake field definitions).
+// Only safe-for-public fields are returned — never private settings.
+export async function getPublicAssistantConfig(params: {
+  organizationSlug?: string;
+  organizationKey?: string;
+  origin?: string;
+}) {
+  const org = await resolveOrgRef(params);
+  if (!org || org.status !== 'active') {
+    throw new ApiError(404, 'NOT_FOUND', 'Assistant not available');
+  }
+
+  const entitled = await organizationHasProduct(org.id, 'WYMASSIST');
+  if (!entitled) throw new ApiError(403, 'PUBLIC_CHAT_UNAVAILABLE', 'Public chat is not available');
+
+  const [config] = await db
+    .select()
+    .from(assistantConfigurations)
+    .where(eq(assistantConfigurations.organizationId, org.id))
+    .limit(1);
+  if (!config?.publicChatEnabled) {
+    throw new ApiError(403, 'PUBLIC_CHAT_DISABLED', 'Public chat is not enabled');
+  }
+
+  assertRequestOrigin({
+    allowedOrigins: parseOrigins(config.allowedOrigins),
+    origin: params.origin,
+  });
+
+  const [settings] = await db
+    .select()
+    .from(organizationSettings)
+    .where(eq(organizationSettings.organizationId, org.id))
+    .limit(1);
+
+  return {
+    organization: { name: org.name, slug: org.slug },
+    assistant: {
+      name: config.assistantName ?? null,
+      welcomeMessage: config.welcomeMessage ?? null,
+    },
+    branding: {
+      logoUrl: settings?.logoUrl ?? null,
+      primaryColor: settings?.primaryColor ?? null,
+      secondaryColor: settings?.secondaryColor ?? null,
+    },
+    features: {
+      leadCapture: config.leadCaptureEnabled,
+      escalation: config.escalationEnabled,
+      appointments: config.appointmentRequestsEnabled,
+    },
+    intakeFields: parseIntakeFields(config.intakeFields),
   };
 }
 

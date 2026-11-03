@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import { db } from '../database/client';
 import { roles, permissions, products, rolePermissions } from '../database/schema/core';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { PERMISSIONS } from '../modules/rbac/permissions';
 
 async function ensurePermission(name: string) {
@@ -35,10 +35,11 @@ async function grant(roleName: string, permissionName: string) {
   const existing = await db
     .select()
     .from(rolePermissions)
-    .where(eq(rolePermissions.roleId, roleId))
+    .where(and(eq(rolePermissions.roleId, roleId), eq(rolePermissions.permissionId, permissionId)))
     .limit(1);
-  // naive insert; duplicates are fine to ignore for seed simplicity
-  await db.insert(rolePermissions).values({ roleId, permissionId }).onConflictDoNothing?.();
+  if (existing.length === 0) {
+    await db.insert(rolePermissions).values({ roleId, permissionId });
+  }
 }
 
 async function ensureProduct(code: string, name: string, description?: string) {
@@ -83,6 +84,20 @@ async function main() {
     'handoff.read',
     'handoff.write',
     'handoff.assign',
+    'lead.read',
+    'lead.write',
+    'knowledge.read',
+    'knowledge.write',
+    'appointment.read',
+    'appointment.write',
+    'report.read',
+    'insight.read',
+    'insight.write',
+    'flow.read',
+    'flow.write',
+    'flow.admin',
+    'subscription.read',
+    'subscription.write',
   ];
   for (const perm of platformWide) await grant('WymNet Super Administrator', perm);
 
@@ -102,11 +117,22 @@ async function main() {
     'handoff.read',
     'handoff.write',
     'handoff.assign',
+    'appointment.read',
+    'appointment.write',
+    'report.read',
+    'insight.read',
+    'insight.write',
+    'flow.read',
+    'flow.write',
+    'flow.admin',
+    'subscription.read',
+    'subscription.write',
   ];
   for (const perm of platformAdmin) await grant('WymNet Administrator', perm);
 
   const clientAdmin = [
     'organization.read',
+    'organization.update',
     'user.read',
     'user.create',
     'user.update',
@@ -122,7 +148,14 @@ async function main() {
     'knowledge.read',
     'knowledge.write',
     'appointment.read',
+    'appointment.write',
     'report.read',
+    'insight.read',
+    'insight.write',
+    'flow.read',
+    'flow.write',
+    'flow.admin',
+    'subscription.read',
   ];
   for (const perm of clientAdmin) await grant('Client Administrator', perm);
 
@@ -137,6 +170,10 @@ async function main() {
     'handoff.write',
     'knowledge.read',
     'appointment.read',
+    'appointment.write',
+    'insight.read',
+    'flow.read',
+    'flow.write',
   ];
   for (const perm of clientStaff) await grant('Client Staff', perm);
 
@@ -146,7 +183,7 @@ async function main() {
 }
 
 main().catch((err) => {
-  // eslint-disable-next-line no-console
+   
   console.error(err);
   process.exit(1);
 });

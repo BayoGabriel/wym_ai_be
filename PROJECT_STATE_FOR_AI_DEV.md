@@ -936,3 +936,134 @@ Two small backend changes were made to support the new sibling frontend app (`..
    scope enforced; `GET /admin/products` remains platform-only.
 
 `npm run typecheck` — PASS after both changes.
+
+---
+
+## 27) Phase 12 update — Commercial feature set
+
+### A. Appointments
+`appointments` table + `appointmentStatusEnum` (`REQUESTED → CONFIRMED →
+COMPLETED | CANCELLED | NO_SHOW`), linked to conversation + chat session,
+idempotent via unique (conversationId, clientRequestId).
+- Public: `POST /api/v1/public/assist/appointments` (session-scoped, rate-limited,
+  gated by `appointmentRequestsEnabled`).
+- Staff: `GET/PATCH /api/v1/appointments[/:id]` with `appointment.read` /
+  `appointment.write`, status-transition validation, assignment, audit events.
+
+### B. Customizable intake fields
+`assistantConfigurations.intakeFields` (JSONB) lets each org define custom lead
+fields (key/label/type/required/options). `leads.customFields` stores submissions;
+public lead capture validates submitted fields against the configuration and
+rejects unknown/invalid fields.
+
+### C. Reports
+`GET /api/v1/reports/enquiries?days=N` (`report.read`) returns org-scoped totals
+for conversations, messages (+daily volume), leads, handoffs and appointments.
+
+### D. Platform administration
+`/api/v1/admin` (`platform.manage`): organization list/create/update including
+status suspend/activate, subscriptions CRUD, platform usage overview, audit feed.
+Client `PATCH /organizations/:id` can no longer change its own `status` (privilege
+escalation fix). Org-facing `GET /organizations/me/subscription` added.
+
+### E. Widget config + embeddable widget
+`GET /api/v1/public/assist/config?organizationSlug=` returns public-safe branding,
+welcome copy, feature flags and intake fields (origin-checked). The widget itself
+is a dependency-free IIFE built from `frontend/src/widget` → `dist-widget/wymassist.js`
+(~13KB), served by the backend at `/widget/` (`WIDGET_ASSETS_DIR`). Embed:
+`<script src="<api>/widget/wymassist.js" data-org="<slug>" data-api="<api>" async>`.
+
+### F. Notifications
+`NotificationProvider` abstraction (console default, generic webhook via
+`NOTIFICATION_WEBHOOK_URL`). Wired into lead capture, handoff request and
+appointment request, honoring per-org `notifyOn*` flags + `notificationEmail`.
+
+### G. WhatsApp channel scaffold
+`/api/v1/webhooks/whatsapp` verification + inbound handler. Inbound messages
+resolve the org via `organization_settings.whatsappPhoneNumberId` and reuse the
+conversation pipeline (handoff pause + idempotency included). Outbound send
+requires `WHATSAPP_ACCESS_TOKEN`; without it inbound still lands in the dashboard.
+Channel enum extended (`WHATSAPP`, `FACEBOOK`, `INSTAGRAM`, `EMAIL`).
+
+### H. Client dashboard (frontend)
+Full WymAssist operational UI under `/dashboard/assist`: conversations inbox +
+thread, handoff queue + agent console (claim/assign/reply/resolve), leads with
+notes + custom fields, appointments with status actions, knowledge manager
+(text + PDF + processing states), reports, settings (assistant config, branding,
+intake-field editor, notification toggles, embed snippet), team/role management.
+Platform admin section (`/dashboard/admin/*`): client orgs, subscriptions, usage.
+Sidebar is entitlement- and permission-driven.
+
+### I. Verified results
+- `tsc` backend + frontend: PASS. `eslint` frontend: PASS. `vite build` + widget
+  build: PASS. 50/50 frontend tests: PASS.
+- Backend vitest suite (incl. `src/tests/phase12/appointments.spec.ts`) requires
+  PostgreSQL — not runnable in this environment; run `docker compose up -d` then
+  `npm test` + `npm run db:migrate` (migration `0009_phase12_appointments_intake.sql`).
+
+### J. Known gaps
+- Appointments are request-based; no calendar availability engine yet.
+- WhatsApp send path untested without live Meta credentials.
+- No email provider behind notifications (webhook/console only).
+- Backend `eslint` has pre-existing repo-wide violations (any-typed code) —
+  new modules were written to keep the lint surface no worse.
+
+---
+
+## 28) Phase 13 update — WymInsight AI + WymFlow AI
+
+### A. WymInsight (`modules/insight`, `/api/v1/insight`)
+- `datasets` (JSONB rows + column profile) and `insight_reports` tables; migration
+  `0012_phase13_insight_flow.sql`.
+- Upload accepts CSV or .xlsx (exceljs) up to 8MB via base64 JSON; first row is the
+  header. Column profiling detects number/date/boolean/text, distinct counts,
+  numeric min/max/mean/sum and top values.
+- `POST /datasets/:id/analyze` runs: KPI extraction, monthly trend detection per
+  date+numeric column pair (least-squares regression, growth %, 3-period forecast),
+  then an LLM executive summary via the same `getLLMProvider()` abstraction
+  (template fallback when the provider fails). Reports are stored and downloadable
+  as CSV (`/reports/:id/download`).
+- Permissions `insight.read` / `insight.write`; entitlement `WYMINSIGHT` enforced
+  on every route; full tenant isolation + audit events.
+
+### B. WymFlow (`modules/flow`, `/api/v1/flow`)
+- `flow_definitions` (fields + ordered approval steps), `flow_instances`
+  (submissions w/ data + document attachments), `flow_tasks` (per-step approvals,
+  assignment, reminders) and `flow_activities` (instance timeline).
+- Submission validates `data` against the definition's field spec (required,
+  select options, types) and rejects unknown fields — same contract as WymAssist
+  intake fields.
+- Engine: submit → task for step 0 → approve advances and creates the next step's
+  task → last approval marks the instance APPROVED; any rejection marks it
+  REJECTED and cancels pending tasks. Tasks can be assigned (`flow.admin`) or
+  decided by assignee/anyone for unassigned tasks (`flow.write`).
+- `POST /flow/reminders/dispatch` (platform.manage) sends notifications for stale
+  pending tasks via `notifyOrgDirect` — designed to be called by a scheduler.
+- Permissions `flow.read` / `flow.write` / `flow.admin`; entitlement `WYMFLOW`;
+  tenant isolation + audit events + per-instance activity log.
+
+### C. Report downloads
+`GET /api/v1/reports/enquiries?days=N&format=csv` returns the enquiry report as a
+CSV attachment; the dashboard Reports page has a Download button.
+
+### D. Frontend
+`/dashboard/insight` (datasets upload/detail, run analysis, report view with
+trend charts + CSV download) and `/dashboard/flow` (workflow definitions with
+field/step editors, submissions with dynamic forms, instance detail with
+approve/reject and activity timeline, My tasks queue). Sidebar groups appear only
+when the org holds the product entitlement AND the user has the permission —
+the modular-per-product subscription model now shows in the UI.
+
+### E. Verified results
+- Backend `tsc --noEmit`: PASS. Frontend `tsc -b`, `eslint`, `vite build`: PASS.
+  Frontend tests: 50/50 PASS.
+- `src/tests/phase13/` (insight + flow specs) written against the existing
+  fixtures; requires PostgreSQL to execute — pending until Docker is available.
+- exceljs added for .xlsx parsing (85 transitive deps; audit warnings noted).
+
+### F. Brief coverage after this phase
+All four development phases now have working implementations: WymAssist
+(complete), WymInsight (upload → analyze → dashboard → download), WymFlow
+(forms → approval workflow → tasks → reminders → activity). Remaining honest
+gaps: no scheduler daemon (reminder sweep is an endpoint), no real billing,
+WhatsApp needs live Meta credentials, appointment availability is request-based.

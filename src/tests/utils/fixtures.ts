@@ -77,26 +77,33 @@ export async function assignUserRole(params: {
     .onConflictDoNothing?.();
 }
 
-export async function ensureAssistProduct() {
-  const existing = await db.select().from(products).where(eq(products.code, 'WYMASSIST')).limit(1);
+export async function ensureProduct(code: string) {
+  const existing = await db.select().from(products).where(eq(products.code, code)).limit(1);
   if (existing.length) return existing[0];
   const [row] = await db
     .insert(products)
-    .values({
-      name: 'WymAssist AI',
-      code: 'WYMASSIST',
-      description: 'Assistant product',
-      active: true,
-    })
+    .values({ name: code, code, description: `${code} product`, active: true })
     .returning();
   return row;
+}
+
+export async function ensureAssistProduct() {
+  return ensureProduct('WYMASSIST');
 }
 
 export async function setAssistEntitlement(params: {
   organizationId: string;
   status: 'active' | 'inactive';
 }) {
-  const product = await ensureAssistProduct();
+  return setEntitlement({ ...params, productCode: 'WYMASSIST' });
+}
+
+export async function setEntitlement(params: {
+  organizationId: string;
+  productCode: string;
+  status: 'active' | 'inactive';
+}) {
+  const product = await ensureProduct(params.productCode);
   const existing = await db
     .select()
     .from(organizationProducts)

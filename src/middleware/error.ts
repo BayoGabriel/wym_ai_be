@@ -15,31 +15,20 @@ export function notFoundHandler(_req: Request, _res: Response, next: NextFunctio
   next(new ApiError(404, 'NOT_FOUND', 'Resource not found'));
 }
 
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, _req: Request, res: Response, next: NextFunction) {
+  // Express only treats this as an error handler when all four params exist.
+  void next;
   const isApi = err instanceof ApiError;
+  const isErrObj = typeof err === 'object' && err !== null;
   const fallbackStatus =
-    !isApi &&
-    typeof err === 'object' &&
-    err &&
-    'status' in err &&
-    typeof (err as any).status === 'number'
-      ? (err as any).status
-      : 500;
+    !isApi && isErrObj && 'status' in err && typeof err.status === 'number' ? err.status : 500;
   const fallbackCode =
-    !isApi &&
-    typeof err === 'object' &&
-    err &&
-    'code' in err &&
-    typeof (err as any).code === 'string'
-      ? (err as any).code
+    !isApi && isErrObj && 'code' in err && typeof err.code === 'string'
+      ? err.code
       : 'INTERNAL_SERVER_ERROR';
   const fallbackMessage =
-    !isApi &&
-    typeof err === 'object' &&
-    err &&
-    'message' in err &&
-    typeof (err as any).message === 'string'
-      ? (err as any).message
+    !isApi && isErrObj && 'message' in err && typeof err.message === 'string'
+      ? err.message
       : 'An unexpected error occurred';
 
   const status = isApi ? err.status : fallbackStatus;

@@ -21,7 +21,7 @@ export async function embedMissingForItem(params: {
         eq(knowledgeChunks.knowledgeItemId, itemId),
         or(
           isNull(knowledgeChunks.embeddingStatus),
-          eq(knowledgeChunks.embeddingStatus as any, 'PENDING')
+          eq(knowledgeChunks.embeddingStatus, 'PENDING')
         )
       )
     );
@@ -35,8 +35,8 @@ export async function embedMissingForItem(params: {
       .update(knowledgeChunks)
       .set({
         embedding: JSON.stringify(e),
-        embeddingStatus: 'COMPLETED' as any,
-        embeddingError: null as any,
+        embeddingStatus: 'COMPLETED',
+        embeddingError: null,
         embeddingModel: provider.model,
         embeddingDim: provider.dimensions,
       })

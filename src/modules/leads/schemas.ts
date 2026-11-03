@@ -13,6 +13,8 @@ export const captureLeadSchema = z.object({
   enquiryCategory: z.enum(LEAD_CATEGORIES).optional(),
   summary: z.string().trim().min(1).max(1000).optional(),
   consentToContact: z.boolean().optional(),
+  // Answers to the organization's configured intake fields (assistant config).
+  customFields: z.record(z.union([z.string().trim().max(500), z.boolean()])).optional(),
   clientRequestId: z.string().min(8).max(128).optional(),
 });
 

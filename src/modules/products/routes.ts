@@ -24,16 +24,16 @@ const assignSchema = z.object({
 const router = Router();
 
 router.get('/products', authenticate, async (req, res) => {
-  const auth = (req as any).auth;
+  const auth = req.auth;
   requirePermission(auth, 'platform.manage');
   const rows = await db.select().from(products);
   return res.json(rows);
 });
 
 router.post('/products', authenticate, validate(createProductSchema), async (req, res) => {
-  const auth = (req as any).auth;
+  const auth = req.auth;
   requirePermission(auth, 'platform.manage');
-  const body = req.body as any;
+  const body = req.body;
   try {
     const [row] = await db.insert(products).values(body).returning();
     await recordAudit({
@@ -44,7 +44,7 @@ router.post('/products', authenticate, validate(createProductSchema), async (req
       metadata: { code: row.code },
     });
     return res.status(201).json(row);
-  } catch (e: any) {
+  } catch {
     return res
       .status(409)
       .json({ error: { code: 'PRODUCT_CODE_EXISTS', message: 'Product code must be unique' } });
@@ -52,7 +52,7 @@ router.post('/products', authenticate, validate(createProductSchema), async (req
 });
 
 router.post('/products/assign', authenticate, validate(assignSchema), async (req, res) => {
-  const auth = (req as any).auth;
+  const auth = req.auth;
   requirePermission(auth, 'platform.manage');
   const body = req.body as {
     organizationId: string;
@@ -69,14 +69,12 @@ router.post('/products/assign', authenticate, validate(assignSchema), async (req
   const ins = db
     .insert(organizationProducts)
     .values({ organizationId: body.organizationId, productId: p.id, status: body.status });
-  // If supported, avoid duplicate error on repeat assignment
-  const inserted = (ins as any).onConflictDoNothing
-    ? await (ins as any)
-        .onConflictDoNothing({
-          target: [organizationProducts.organizationId, organizationProducts.productId],
-        })
-        .returning()
-    : await ins.returning();
+  // Re-assignment of an already-entitled product is a no-op, not an error.
+  const inserted = await ins
+    .onConflictDoNothing({
+      target: [organizationProducts.organizationId, organizationProducts.productId],
+    })
+    .returning();
   let row = inserted[0];
   if (!row) {
     const existing = await db

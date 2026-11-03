@@ -505,3 +505,131 @@ Auth variables: `{{access_token}}`, `{{refresh_token}}`
   "clientRequestId": "req-2026-10-06-01"
 }
 ```
+
+## Public Widget API (`/api/v1/public/assist`)
+
+Unauthenticated endpoints used by the embeddable widget (`wymassist.js`).
+Visitor session endpoints require `Authorization: Bearer wymcs_...` (the
+`sessionToken` returned by session creation).
+
+### Get Public Assistant Config
+
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/v1/public/assist/config?organizationSlug={{org_slug}}`
+- Returns branding, welcome copy, feature flags and intake-field definitions.
+  Origin-checked against the org's `allowedOrigins`.
+
+### Create Chat Session
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/v1/public/assist/sessions`
+- **Body:** `{ "organizationSlug": "acme", "visitorName": "Jane" }`
+- Returns `sessionToken` (sent as `Bearer` on all subsequent calls).
+
+### Send Visitor Message (→ AI reply)
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/v1/public/assist/messages`
+- **Body:** `{ "content": "Do you offer boarding?", "clientRequestId": "w-001" }`
+
+### List Messages
+
+- **Method:** `GET`
+- **URL:** `{{base_url}}/api/v1/public/assist/messages?limit=100`
+
+### Capture Lead
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/v1/public/assist/leads`
+- **Body:** `{ "name": "Jane", "email": "j@x.com", "phone": "+234...", "customFields": {"course":"Nursing"}, "consentToContact": true }`
+- `customFields` is validated against the org's configured intake fields.
+
+### Request Human Handoff / Poll Status
+
+- **Method:** `POST` / `GET` — `{{base_url}}/api/v1/public/assist/handoff`
+- **Body (POST):** `{ "reason": "Need pricing details" }`
+
+### Request Appointment
+
+- **Method:** `POST`
+- **URL:** `{{base_url}}/api/v1/public/assist/appointments`
+- **Body:** `{ "customerName": "Jane", "preferredDate": "2026-11-01", "preferredTime": "10:30", "reason": "Admissions visit" }`
+
+## Appointments (staff)
+
+Authenticated, org-scoped, `appointment.read`/`appointment.write`.
+
+- `GET {{base_url}}/api/v1/appointments?status=REQUESTED&page=1`
+- `GET {{base_url}}/api/v1/appointments/{{id}}`
+- `PATCH {{base_url}}/api/v1/appointments/{{id}}` — `status` transitions
+  (`CONFIRMED`, `COMPLETED`, `CANCELLED`, `NO_SHOW`), `assignedToUserId`, `internalNotes`.
+
+## Leads (staff)
+
+- `GET {{base_url}}/api/v1/leads?status=NEW`
+- `GET {{base_url}}/api/v1/leads/{{id}}` / `PATCH {{base_url}}/api/v1/leads/{{id}}`
+- `POST {{base_url}}/api/v1/leads/{{id}}/notes`
+
+## Handoffs (staff)
+
+- `GET {{base_url}}/api/v1/handoffs?status=QUEUED`
+- `GET {{base_url}}/api/v1/handoffs/{{id}}`
+- `POST {{base_url}}/api/v1/handoffs/{{id}}/claim` / `/assign` / `/resolve` / `/cancel`
+- `POST {{base_url}}/api/v1/handoffs/{{id}}/replies` — staff reply into the visitor thread
+- `POST {{base_url}}/api/v1/handoffs/{{id}}/notes`
+
+## Reports
+
+- `GET {{base_url}}/api/v1/reports/enquiries?days=30` — `report.read`.
+  Conversation/message/lead/handoff/appointment totals + daily message volume.
+
+## Platform Admin (`/api/v1/admin`, `platform.manage`)
+
+- `GET {{base_url}}/api/v1/organizations` — all client orgs (platform users see every org)
+- `POST {{base_url}}/api/v1/organizations` — create a client org (`organization.create`)
+- `PATCH {{base_url}}/api/v1/organizations/{{id}}` — org fields (`organization.update`)
+- `POST {{base_url}}/api/v1/admin/organizations/{{id}}/status` — `{"status": "active"|"suspended"}` suspend/activate a client
+- `GET {{base_url}}/api/v1/admin/subscriptions` / `POST` / `PATCH /{{id}}`
+- `GET {{base_url}}/api/v1/admin/usage` — platform-wide usage totals
+- `GET {{base_url}}/api/v1/admin/audit-events?limit=50` — platform audit feed
+
+## WhatsApp Channel (scaffold)
+
+- `GET {{base_url}}/api/v1/webhooks/whatsapp` — Meta verification handshake
+- `POST {{base_url}}/api/v1/webhooks/whatsapp` — inbound messages; resolves the org
+  via the `whatsappPhoneNumberId` org setting, reuses the conversation pipeline.
+- Outbound replies send via `WHATSAPP_ACCESS_TOKEN` when configured; without
+  credentials inbound messages are stored and visible in the dashboard only.
+
+## WymInsight AI (staff)
+
+Authenticated, org-scoped, requires `WYMINSIGHT` entitlement + `insight.read`/`insight.write`.
+
+- `POST {{base_url}}/api/v1/insight/datasets` — upload `{name, filename, contentBase64}` (`.csv` or `.xlsx`, ≤8MB); profiles columns on ingest
+- `GET {{base_url}}/api/v1/insight/datasets` / `GET /:id` / `DELETE /:id`
+- `POST {{base_url}}/api/v1/insight/datasets/:id/analyze` — runs column stats, KPI extraction, trend detection + LLM executive summary; returns the stored report
+- `GET {{base_url}}/api/v1/insight/reports?datasetId=` / `GET /:id`
+- `GET {{base_url}}/api/v1/insight/reports/:id/download` — CSV export of KPIs, column stats and trend tables
+
+## WymFlow AI (staff)
+
+Authenticated, org-scoped, requires `WYMFLOW` entitlement.
+
+### Workflow definitions (`flow.admin` to create/update, `flow.read` to view)
+
+- `POST/GET/PATCH {{base_url}}/api/v1/flow/definitions[/:id]`
+- Definition body: `{name, description, fields:[{key,label,type,required,options?}], steps:[{name,description?}], active}`
+- Submissions are validated against `fields`; `steps` are the ordered approval chain.
+
+### Submissions (`flow.write` to submit/cancel, `flow.read` to view)
+
+- `POST {{base_url}}/api/v1/flow/instances` — `{definitionId, title, data, documents:[{filename,contentBase64}]}`
+- `GET {{base_url}}/api/v1/flow/instances?status=&definitionId=` / `GET /:id` (includes tasks + activity timeline)
+- `POST {{base_url}}/api/v1/flow/instances/:id/cancel`
+
+### Approval tasks (`flow.write` to decide, `flow.admin` to reassign)
+
+- `GET {{base_url}}/api/v1/flow/tasks?mine=true&status=PENDING`
+- `POST {{base_url}}/api/v1/flow/tasks/:id/approve` / `/reject` — `{note?}`; approve advances to the next step, reject completes the instance as REJECTED
+- `POST {{base_url}}/api/v1/flow/tasks/:id/assign` — `{assignedTo}` or null to return to the shared queue
+- `POST {{base_url}}/api/v1/flow/reminders/dispatch` — platform-only sweep that notifies on stale pending tasks (call from a scheduler)

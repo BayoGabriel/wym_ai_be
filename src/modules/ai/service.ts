@@ -17,7 +17,7 @@ export type AIResponse = {
   grounded: boolean;
   sources: Array<{ chunkId: string; knowledgeItemId: string; score: number }>;
   usage?: { inputTokens?: number; outputTokens?: number; totalTokens?: number };
-  meta?: Record<string, any>;
+  meta?: Record<string, unknown>;
 };
 
 export async function generateResponse(req: AIRequest): Promise<AIResponse> {

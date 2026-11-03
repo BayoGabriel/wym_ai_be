@@ -5,6 +5,7 @@ import { db } from '../../database/client';
 import { organizations, users } from '../../database/schema/core';
 import { hashPassword, issueTokens } from '../../modules/auth/service';
 import { eq } from 'drizzle-orm';
+import { ensureRole, grantRolePermission, assignUserRole } from '../utils/fixtures';
 
 async function ensureOrg(name: string, slug: string) {
   const existing = await db
@@ -34,16 +35,27 @@ describe('Organization settings & Assist configuration', () => {
   let orgB: any;
   let tokenA: string;
   let tokenB: string;
+  let staffToken: string;
 
   beforeAll(async () => {
     orgA = await ensureOrg('Org A', 'org-a-settings');
     orgB = await ensureOrg('Org B', 'org-b-settings');
     const uA = await ensureUser('adminA@example.com', orgA.id);
     const uB = await ensureUser('adminB@example.com', orgB.id);
+    const uStaff = await ensureUser('staffA@example.com', orgA.id);
+
+    const adminRole = await ensureRole('Settings Admin', 'organization');
+    await grantRolePermission(adminRole.id, 'organization.update');
+    await assignUserRole({ userId: uA.id, roleId: adminRole.id, organizationId: orgA.id });
+    await assignUserRole({ userId: uB.id, roleId: adminRole.id, organizationId: orgB.id });
+
     tokenA = (await issueTokens({ id: uA.id, organizationId: orgA.id, status: 'active' }))
       .accessToken;
     tokenB = (await issueTokens({ id: uB.id, organizationId: orgB.id, status: 'active' }))
       .accessToken;
+    staffToken = (
+      await issueTokens({ id: uStaff.id, organizationId: orgA.id, status: 'active' })
+    ).accessToken;
   });
 
   it('GET settings requires auth', async () => {
@@ -84,6 +96,20 @@ describe('Organization settings & Assist configuration', () => {
       .set('Authorization', `Bearer ${tokenB}`);
     expect(getB.status).toBe(200);
     expect(getB.body.businessName ?? '').not.toBe('HACK B');
+  });
+
+  it('rejects settings/config writes from org members without organization.update', async () => {
+    const s = await request(app)
+      .patch('/api/v1/organizations/settings')
+      .set('Authorization', `Bearer ${staffToken}`)
+      .send({ businessName: 'Staff Hack' });
+    expect(s.status).toBe(403);
+
+    const a = await request(app)
+      .patch('/api/v1/assist')
+      .set('Authorization', `Bearer ${staffToken}`)
+      .send({ assistantName: 'Staff Hack' });
+    expect(a.status).toBe(403);
   });
 
   it('Assist config is org-scoped and PATCH is partial', async () => {

@@ -21,7 +21,15 @@ export const PERMISSIONS = {
   'knowledge.read': 'knowledge.read',
   'knowledge.write': 'knowledge.write',
   'appointment.read': 'appointment.read',
+  'appointment.write': 'appointment.write',
   'report.read': 'report.read',
+  'insight.read': 'insight.read',
+  'insight.write': 'insight.write',
+  'flow.read': 'flow.read',
+  'flow.write': 'flow.write',
+  'flow.admin': 'flow.admin',
+  'subscription.read': 'subscription.read',
+  'subscription.write': 'subscription.write',
   'platform.manage': 'platform.manage',
 } as const;
 

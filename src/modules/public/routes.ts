@@ -6,6 +6,7 @@ import { env } from '../../config/env';
 import { ApiError } from '../../middleware/error';
 import {
   createPublicSessionSchema,
+  publicConfigQuerySchema,
   publicMessageSchema,
   publicMessagesQuerySchema,
 } from './schemas';
@@ -17,8 +18,11 @@ import {
   requestHandoffFromPublicSession,
   toPublicHandoff,
 } from '../handoffs/service';
+import { requestAppointmentSchema } from '../appointments/schemas';
+import { requestAppointmentFromPublicSession, toPublicAppointment } from '../appointments/service';
 import {
   createPublicChatSession,
+  getPublicAssistantConfig,
   getPublicSessionState,
   toPublicMessage,
   PublicSessionContext,
@@ -60,7 +64,8 @@ const sessionCreateLimiter = rateLimit({
   standardHeaders: true,
   legacyHeaders: false,
   store: new PostgresRateLimitStore(),
-  keyGenerator: (req) => `${req.ip}:${req.body?.organizationSlug ?? ''}`,
+  keyGenerator: (req) =>
+    `${req.ip}:${req.body?.organizationKey ?? req.body?.organizationSlug ?? ''}`,
 });
 
 const messageLimiter = rateLimit({
@@ -100,19 +105,47 @@ const handoffLimiter = rateLimit({
     `handoff:${(req as PublicSessionRequest).publicSession?.sessionId ?? req.ip}`,
 });
 
+const appointmentLimiter = rateLimit({
+  windowMs: env.PUBLIC_CHAT_RATE_LIMIT_WINDOW_MS,
+  max: env.PUBLIC_CHAT_LEAD_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  store: new PostgresRateLimitStore(),
+  keyGenerator: (req) => `appt:${(req as PublicSessionRequest).publicSession?.sessionId ?? req.ip}`,
+});
+
+// Unauthenticated widget bootstrap: branding, welcome copy, feature flags and
+// intake-field definitions. Origin-checked against the org's allowlist.
+router.get(
+  '/config',
+  readLimiter,
+  validate(publicConfigQuerySchema, 'query'),
+  handle(async (req, res) => {
+    const q = req.query as unknown as { organizationSlug?: string; organizationKey?: string };
+    const config = await getPublicAssistantConfig({
+      organizationSlug: q.organizationSlug,
+      organizationKey: q.organizationKey,
+      origin: req.headers.origin,
+    });
+    res.json(config);
+  })
+);
+
 router.post(
   '/sessions',
   sessionCreateLimiter,
   validate(createPublicSessionSchema),
   handle(async (req, res) => {
     const body = req.body as {
-      organizationSlug: string;
+      organizationSlug?: string;
+      organizationKey?: string;
       visitorName?: string;
       metadata?: Record<string, unknown>;
     };
 
     const session = await createPublicChatSession({
       organizationSlug: body.organizationSlug,
+      organizationKey: body.organizationKey,
       visitorName: body.visitorName,
       metadata: body.metadata,
       origin: req.headers.origin,
@@ -200,6 +233,7 @@ router.post(
       enquiryCategory?: string;
       summary?: string;
       consentToContact?: boolean;
+      customFields?: Record<string, unknown>;
       clientRequestId?: string;
     };
 
@@ -253,6 +287,38 @@ router.get(
       sessionId: ctx.sessionId,
     });
     res.json({ handoff: handoff ? toPublicHandoff(handoff) : null });
+  })
+);
+
+router.post(
+  '/appointments',
+  authenticatePublicSession,
+  appointmentLimiter,
+  validate(requestAppointmentSchema),
+  handle(async (req, res) => {
+    const ctx = sessionOf(req);
+    const body = req.body as {
+      customerName: string;
+      email?: string;
+      phone?: string;
+      preferredDate: string;
+      preferredTime: string;
+      reason?: string;
+      clientRequestId?: string;
+    };
+
+    const result = await requestAppointmentFromPublicSession({
+      organizationId: ctx.organizationId,
+      conversationId: ctx.conversationId,
+      sessionId: ctx.sessionId,
+      ...body,
+    });
+
+    res.status(result.idempotentReplay ? 200 : 201).json(
+      toPublicAppointment(result.appointment, {
+        idempotentReplay: result.idempotentReplay,
+      })
+    );
   })
 );
 

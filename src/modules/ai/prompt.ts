@@ -3,7 +3,7 @@ import { env } from '../../config/env';
 export type PromptContext = {
   systemVersion?: string;
   organizationInstructions?: string;
-  retrievedKnowledge: Array<{ content: string; score: number; metadata?: any }>; // ordered
+  retrievedKnowledge: Array<{ content: string; score: number; metadata?: Record<string, unknown> }>; // ordered
   message: string;
   language?: string;
 };
@@ -13,7 +13,7 @@ export type PromptConversationMessage = {
   content: string;
 };
 
-export function buildSystemPrompt(_: { version?: string } = {}) {
+export function buildSystemPrompt() {
   return [
     'You are WymAssist, an AI assistant representing an organization.',
     'Follow these rules strictly:',

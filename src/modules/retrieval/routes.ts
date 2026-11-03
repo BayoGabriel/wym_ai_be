@@ -1,3 +1,4 @@
+import { AuthContext } from '../../types/auth';
 import { NextFunction, Request, Response, Router } from 'express';
 import { authenticate } from '../auth/middleware';
 import { requirePermission } from '../rbac/authz';
@@ -22,11 +23,11 @@ const retrieveSchema = z.object({
 
 router.use(authenticate);
 
-async function ensureAssistEntitlement(auth: any) {
+async function ensureAssistEntitlement(auth: AuthContext) {
   const ok =
     auth.organizationId && (await organizationHasProduct(auth.organizationId, 'WYMASSIST'));
   if (!ok) {
-    const err: any = new Error('Forbidden: WYMASSIST not entitled');
+    const err: Error & { status?: number; code?: string } = new Error('Forbidden: WYMASSIST not entitled');
     err.status = 403;
     throw err;
   }
@@ -36,7 +37,7 @@ router.post(
   '/knowledge/retrieve',
   validate(retrieveSchema, 'body'),
   handle(async (req, res) => {
-    const auth = (req as any).auth;
+    const auth = req.auth;
     requirePermission(auth, 'knowledge.read');
     await ensureAssistEntitlement(auth);
     const { query, topK, minScore } = req.body;

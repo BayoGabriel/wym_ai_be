@@ -1,0 +1,1 @@
+ALTER TABLE "organization_settings" ADD COLUMN "whatsapp_phone_number_id" varchar(64);

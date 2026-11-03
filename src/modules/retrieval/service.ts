@@ -1,6 +1,6 @@
 import { db } from '../../database/client';
 import { knowledgeChunks, knowledgeItems } from '../../database/schema/core';
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import { getEmbeddingProvider } from './embedding';
 import { env } from '../../config/env';
 
@@ -47,7 +47,7 @@ export async function retrieveRelevantKnowledge(params: RetrievalParams) {
     .limit(200); // small candidate cap
 
   const withScores = rows
-    .map((r: any) => {
+    .map((r) => {
       const e = r.embedding ? (JSON.parse(r.embedding) as number[]) : null;
       const score = e ? cosine(qEmb, e) : 0;
       return { ...r, score };
@@ -80,11 +80,12 @@ function cosine(a: number[], b: number[]) {
   return dot / denom;
 }
 
-function safeParseMeta(m: any): any {
+function safeParseMeta(m: unknown): Record<string, unknown> | undefined {
   if (!m) return undefined;
   try {
-    if (typeof m === 'string') return JSON.parse(m);
-    return m;
+    if (typeof m === 'string') return JSON.parse(m) as Record<string, unknown>;
+    if (typeof m === 'object') return m as Record<string, unknown>;
+    return undefined;
   } catch {
     return undefined;
   }

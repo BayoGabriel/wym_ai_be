@@ -1,9 +1,12 @@
 import { NextFunction, Request, Response } from 'express';
-import { ZodSchema } from 'zod';
+import { ZodType, ZodTypeDef } from 'zod';
 
-export function validate(schema: ZodSchema<any>, pick: 'body' | 'params' | 'query' = 'body') {
+export function validate(
+  schema: ZodType<unknown, ZodTypeDef, unknown>,
+  pick: 'body' | 'params' | 'query' = 'body'
+) {
   return (req: Request, res: Response, next: NextFunction) => {
-    const parsed = schema.safeParse((req as any)[pick]);
+    const parsed = schema.safeParse(req[pick]);
     if (!parsed.success) {
       return res.status(400).json({
         error: {
@@ -13,7 +16,7 @@ export function validate(schema: ZodSchema<any>, pick: 'body' | 'params' | 'quer
         },
       });
     }
-    (req as any)[pick] = parsed.data;
+    (req as unknown as Record<string, unknown>)[pick] = parsed.data;
     next();
   };
 }

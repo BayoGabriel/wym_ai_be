@@ -2,7 +2,7 @@ import { NextFunction, Request, Response } from 'express';
 import { verifyAccessToken } from './service';
 import { db } from '../../database/client';
 import { users, roles, userRoles, rolePermissions, permissions } from '../../database/schema/core';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { AuthContext } from '../../types/auth';
 
 export async function authenticate(req: Request, res: Response, next: NextFunction) {
@@ -11,7 +11,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Missing token' } });
   const token = auth.substring('Bearer '.length);
   try {
-    const payload = verifyAccessToken(token) as any;
+    const payload = verifyAccessToken(token);
     const [user] = await db.select().from(users).where(eq(users.id, payload.sub)).limit(1);
     if (!user || user.status !== 'active')
       return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid user' } });
@@ -45,7 +45,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       roleMap.set(r.roleId, {
         id: r.roleId,
         name: r.roleName,
-        scope: r.scope as any,
+        scope: r.scope as 'platform' | 'organization',
         organizationId: r.orgId,
       });
       if (r.permissionName) perms.add(r.permissionName);
@@ -58,7 +58,7 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       permissions: Array.from(perms.values()),
       platformAccess: user.organizationId == null,
     };
-    (req as any).auth = ctx;
+    req.auth = ctx;
     next();
   } catch {
     return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid token' } });

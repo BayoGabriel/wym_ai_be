@@ -22,7 +22,7 @@ export async function processKnowledgeItem(params: {
 
   await db
     .update(knowledgeItems)
-    .set({ processingStatus: 'PROCESSING', processingError: null as any })
+    .set({ processingStatus: 'PROCESSING', processingError: null })
     .where(eq(knowledgeItems.id, itemId));
   await recordAudit({
     organizationId,
@@ -54,7 +54,7 @@ export async function processKnowledgeItem(params: {
           knowledgeItemId: itemId,
           content: c.content,
           chunkIndex: nextChunkIndex++,
-          metadata: null as any,
+          metadata: null,
         }));
         await db.insert(knowledgeChunks).values(values);
       }
@@ -71,7 +71,7 @@ export async function processKnowledgeItem(params: {
       if (!raw.trim()) throw new Error('No extractable text in PDF');
       // split pages on form-feed if present, otherwise treat as single page
       const pages = raw.split('\f');
-      const values: any[] = [];
+      const values: (typeof knowledgeChunks.$inferInsert)[] = [];
       for (let p = 0; p < pages.length; p++) {
         const normalized = normalizeText(pages[p]);
         const chunks = chunkText(normalized);
@@ -94,7 +94,7 @@ export async function processKnowledgeItem(params: {
 
     await db
       .update(knowledgeItems)
-      .set({ processingStatus: 'COMPLETED', processingError: null as any })
+      .set({ processingStatus: 'COMPLETED', processingError: null })
       .where(eq(knowledgeItems.id, itemId));
     await recordAudit({
       organizationId,
@@ -103,10 +103,11 @@ export async function processKnowledgeItem(params: {
       resourceType: 'knowledge_item',
       resourceId: itemId,
     });
-  } catch (e: any) {
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
     await db
       .update(knowledgeItems)
-      .set({ processingStatus: 'FAILED', processingError: String(e?.message || e) })
+      .set({ processingStatus: 'FAILED', processingError: errMsg })
       .where(eq(knowledgeItems.id, itemId));
     await recordAudit({
       organizationId,
@@ -114,7 +115,7 @@ export async function processKnowledgeItem(params: {
       action: 'knowledge.processing.failed',
       resourceType: 'knowledge_item',
       resourceId: itemId,
-      metadata: { error: String(e?.message || e) },
+      metadata: { error: errMsg },
     });
     throw e;
   }

@@ -1,9 +1,9 @@
-import { Router } from 'express';
+import { NextFunction, Request, Response, Router } from 'express';
 import { validate } from '../../middleware/validate';
 import { loginSchema, refreshSchema, registerSchema } from './schemas';
 import { db } from '../../database/client';
 import { organizations, users, userRoles, roles } from '../../database/schema/core';
-import { and, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import {
   issueTokens,
   revokeRefreshToken,
@@ -12,11 +12,18 @@ import {
   verifyPassword,
 } from './service';
 import { authenticate } from './middleware';
+import { newPublicKey } from '../../lib/keys';
 
 const router = Router();
 
-router.post('/register', validate(registerSchema), async (req, res) => {
-  const { email, password, name, organizationName, organizationSlug } = req.body as any;
+function handle(fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    fn(req, res, next).catch(next);
+  };
+}
+
+router.post('/register', validate(registerSchema), handle(async (req, res) => {
+  const { email, password, name, organizationName, organizationSlug } = req.body;
   // Prevent duplicate email
   const existingUser = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (existingUser.length)
@@ -25,9 +32,15 @@ router.post('/register', validate(registerSchema), async (req, res) => {
       .json({ error: { code: 'EMAIL_EXISTS', message: 'Email already registered' } });
 
   // Organization slug
-  const slug = (
-    organizationSlug || organizationName.toLowerCase().replace(/[^a-z0-9]+/g, '-')
-  ).replace(/^-+|-+$/g, '');
+  const slugBase = (organizationSlug || organizationName.toLowerCase().replace(/[^a-z0-9]+/g, '-'))
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60);
+  if (!slugBase) {
+    return res
+      .status(400)
+      .json({ error: { code: 'VALIDATION_ERROR', message: 'Organization name must contain letters or numbers' } });
+  }
+  const slug = slugBase;
   const orgExists = await db
     .select()
     .from(organizations)
@@ -38,30 +51,33 @@ router.post('/register', validate(registerSchema), async (req, res) => {
       .status(409)
       .json({ error: { code: 'ORG_EXISTS', message: 'Organization slug already exists' } });
 
-  // Create org + user
-  const [org] = await db
-    .insert(organizations)
-    .values({ name: organizationName, slug, status: 'active' })
-    .returning();
   const { hashPassword, issueTokens } = await import('./service');
   const passwordHash = await hashPassword(password);
-  const [user] = await db
-    .insert(users)
-    .values({ email, name, passwordHash, status: 'active', organizationId: org.id })
-    .returning();
 
-  // Assign default org admin role if present
+  // Org + user + role must be created atomically — a partial signup must not
+  // leave an organization with no members.
   const [role] = await db
     .select()
     .from(roles)
     .where(eq(roles.name, 'Client Administrator'))
     .limit(1);
-  if (role) {
-    await db
-      .insert(userRoles)
-      .values({ userId: user.id, roleId: role.id, organizationId: org.id })
-      .onConflictDoNothing?.();
-  }
+
+  const { org, user } = await db.transaction(async (tx) => {
+    const [org] = await tx
+      .insert(organizations)
+      .values({ name: organizationName, slug, status: 'active', publicKey: newPublicKey() })
+      .returning();
+    const [user] = await tx
+      .insert(users)
+      .values({ email, name, passwordHash, status: 'active', organizationId: org.id })
+      .returning();
+    if (role) {
+      await tx
+        .insert(userRoles)
+        .values({ userId: user.id, roleId: role.id, organizationId: org.id });
+    }
+    return { org, user };
+  });
 
   const tokens = await issueTokens({ id: user.id, organizationId: org.id, status: 'active' });
   return res.status(201).json({
@@ -70,9 +86,9 @@ router.post('/register', validate(registerSchema), async (req, res) => {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
   });
-});
+}));
 
-router.post('/login', validate(loginSchema), async (req, res) => {
+router.post('/login', validate(loginSchema), handle(async (req, res) => {
   const { email, password } = req.body as { email: string; password: string };
   const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
   if (!user)
@@ -97,9 +113,9 @@ router.post('/login', validate(loginSchema), async (req, res) => {
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
   });
-});
+}));
 
-router.post('/refresh', validate(refreshSchema), async (req, res) => {
+router.post('/refresh', validate(refreshSchema), handle(async (req, res) => {
   const { refreshToken } = req.body as { refreshToken: string };
   // We need user context to rotate; require clients to send existing access token or include user id in token
   // For simplicity, decode if client also sends current access token
@@ -113,7 +129,7 @@ router.post('/refresh', validate(refreshSchema), async (req, res) => {
     // The access token only binds the refresh to a user; an expired (but
     // validly signed) access token must not prevent refresh — that is the
     // whole point of the refresh flow.
-    const payload = verifyAccessToken(accessToken, { ignoreExpiration: true }) as any;
+    const payload = verifyAccessToken(accessToken, { ignoreExpiration: true });
     const tokens = await rotateRefreshToken(payload.sub, refreshToken);
     return res.json(tokens);
   } catch {
@@ -121,9 +137,9 @@ router.post('/refresh', validate(refreshSchema), async (req, res) => {
       .status(401)
       .json({ error: { code: 'UNAUTHORIZED', message: 'Invalid access token' } });
   }
-});
+}));
 
-router.post('/logout', validate(refreshSchema), async (req, res) => {
+router.post('/logout', validate(refreshSchema), handle(async (req, res) => {
   const { refreshToken } = req.body as { refreshToken: string };
   const auth = req.headers.authorization;
   if (!auth?.startsWith('Bearer '))
@@ -132,7 +148,7 @@ router.post('/logout', validate(refreshSchema), async (req, res) => {
       .json({ error: { code: 'UNAUTHORIZED', message: 'Missing access token' } });
   const accessToken = auth.substring('Bearer '.length);
   try {
-    const payload = verifyAccessToken(accessToken, { ignoreExpiration: true }) as any;
+    const payload = verifyAccessToken(accessToken, { ignoreExpiration: true });
     await revokeRefreshToken(payload.sub, refreshToken);
     return res.status(204).send();
   } catch {
@@ -140,10 +156,10 @@ router.post('/logout', validate(refreshSchema), async (req, res) => {
       .status(401)
       .json({ error: { code: 'UNAUTHORIZED', message: 'Invalid access token' } });
   }
-});
+}));
 
-router.get('/me', authenticate, async (req, res) => {
-  const auth = (req as any).auth;
+router.get('/me', authenticate, handle(async (req, res) => {
+  const auth = req.auth;
   const [user] = await db.select().from(users).where(eq(users.id, auth.userId)).limit(1);
   if (!user)
     return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Unknown user' } });
@@ -157,6 +173,6 @@ router.get('/me', authenticate, async (req, res) => {
     permissions: auth.permissions,
     platformAccess: auth.platformAccess,
   });
-});
+}));
 
 export default router;

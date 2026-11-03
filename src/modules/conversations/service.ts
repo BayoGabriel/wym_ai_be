@@ -79,7 +79,7 @@ export async function createConversation(params: {
       channel: params.channel,
       externalSessionId: params.externalSessionId ?? null,
       title: params.title ?? null,
-      metadata: stringifyMetadata(params.metadata) as any,
+      metadata: stringifyMetadata(params.metadata),
     })
     .returning();
 
@@ -180,11 +180,11 @@ export async function updateConversation(params: {
     updates.status = params.status;
     updates.closedAt = params.status === 'CLOSED' ? new Date() : null;
   }
-  if (params.metadata) updates.metadata = stringifyMetadata(params.metadata) as any;
+  if (params.metadata) updates.metadata = stringifyMetadata(params.metadata);
 
   const [updated] = await db
     .update(conversations)
-    .set(updates as any)
+    .set(updates)
     .where(eq(conversations.id, params.conversationId))
     .returning();
 
@@ -417,7 +417,7 @@ export async function createUserMessageAndGenerateAssistant(params: {
         role: 'USER' as MessageRole,
         content: params.content,
         clientRequestId: params.clientRequestId ?? null,
-        metadata: stringifyMetadata(params.metadata) as any,
+        metadata: stringifyMetadata(params.metadata),
       };
       try {
         [userMessage] = await tx.insert(messages).values(values).returning();
