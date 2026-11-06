@@ -1,8 +1,16 @@
 import 'dotenv/config';
 import { db } from '../database/client';
-import { roles, permissions, products, rolePermissions } from '../database/schema/core';
+import {
+  roles,
+  permissions,
+  products,
+  rolePermissions,
+  users,
+  userRoles,
+} from '../database/schema/core';
 import { and, eq } from 'drizzle-orm';
 import { PERMISSIONS } from '../modules/rbac/permissions';
+import { hashPassword } from '../modules/auth/service';
 
 async function ensurePermission(name: string) {
   const existing = await db.select().from(permissions).where(eq(permissions.name, name)).limit(1);
@@ -176,6 +184,39 @@ async function main() {
     'flow.write',
   ];
   for (const perm of clientStaff) await grant('Client Staff', perm);
+
+  // Platform super administrator (organizationId null → platform access).
+  // In production the credentials must be supplied explicitly — the built-in
+  // defaults exist for local development only.
+  const adminEmail = process.env.SEED_ADMIN_EMAIL ?? 'info@wymnet.org';
+  const adminPassword = process.env.SEED_ADMIN_PASSWORD;
+  if (process.env.NODE_ENV === 'production' && !adminPassword) {
+    throw new Error('SEED_ADMIN_PASSWORD must be set when seeding a production database');
+  }
+  const resolvedAdminPassword = adminPassword ?? 'Wymnet@1995';
+  let [admin] = await db.select().from(users).where(eq(users.email, adminEmail)).limit(1);
+  if (!admin) {
+    const passwordHash = await hashPassword(resolvedAdminPassword);
+    [admin] = await db
+      .insert(users)
+      .values({
+        email: adminEmail,
+        name: 'WymNet Super Admin',
+        passwordHash,
+        status: 'active',
+        organizationId: null,
+      })
+      .returning();
+  }
+  const superRoleId = await idForRole('WymNet Super Administrator');
+  const [assigned] = await db
+    .select()
+    .from(userRoles)
+    .where(and(eq(userRoles.userId, admin.id), eq(userRoles.roleId, superRoleId)))
+    .limit(1);
+  if (!assigned) {
+    await db.insert(userRoles).values({ userId: admin.id, roleId: superRoleId });
+  }
 
   // eslint-disable-next-line no-console
   console.log('Seed completed');

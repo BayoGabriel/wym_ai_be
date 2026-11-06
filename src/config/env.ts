@@ -4,7 +4,19 @@ import { z } from 'zod';
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.coerce.number().int().positive().default(3000),
+  // Comma-separated CORS allowlist for the authenticated API (bare origins).
+  // Empty = reflect any origin (convenient for dev; set this in production).
+  CORS_ORIGINS: z.string().default(''),
+  // Mount Swagger UI + spec JSON at /api/docs. Defaults off in production.
+  ENABLE_API_DOCS: z
+    .enum(['true', 'false'])
+    .optional()
+    .transform((v) => (v === undefined ? process.env.NODE_ENV !== 'production' : v === 'true')),
   DATABASE_URL: z.string().url(),
+  // 'require' enables TLS for managed Postgres (Render, RDS, etc.) that does
+  // not accept plaintext connections. PGSSLMODE also works for the pg driver;
+  // this flag additionally covers drizzle-kit migrate.
+  DATABASE_SSL: z.enum(['disable', 'require']).default('disable'),
   JWT_ACCESS_SECRET: z.string().min(16),
   JWT_REFRESH_SECRET: z.string().min(16),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
@@ -85,10 +97,15 @@ const envSchema = z.object({
   NOTIFICATION_TIMEOUT_MS: z.coerce.number().int().positive().default(5000),
   WHATSAPP_VERIFY_TOKEN: z.string().min(1).optional(),
   WHATSAPP_ACCESS_TOKEN: z.string().min(1).optional(),
+  // App secret for X-Hub-Signature-256 verification on WhatsApp webhook POSTs.
+  WHATSAPP_APP_SECRET: z.string().min(1).optional(),
   WHATSAPP_GRAPH_VERSION: z.string().default('v21.0'),
   // Meta webhook verification shared by Messenger and Instagram (each Meta app
   // webhook product can use the same verify token).
   META_VERIFY_TOKEN: z.string().min(1).optional(),
+  // App secret used to verify X-Hub-Signature-256 on inbound Messenger/Instagram
+  // webhooks. Set this in production — without it webhook POSTs are unverified.
+  META_APP_SECRET: z.string().min(1).optional(),
   META_GRAPH_VERSION: z.string().default('v21.0'),
   MESSENGER_PAGE_ACCESS_TOKEN: z.string().min(1).optional(),
   INSTAGRAM_PAGE_ACCESS_TOKEN: z.string().min(1).optional(),

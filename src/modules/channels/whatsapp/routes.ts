@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { env } from '../../../config/env';
+import { verifyMetaSignature } from '../meta/common';
 import { handleInboundWhatsAppText } from './service';
 
 const router = Router();
@@ -40,6 +41,9 @@ type WaInboundMessage = {
 router.post(
   '/whatsapp',
   handle(async (req, res) => {
+    if (!verifyMetaSignature(req, env.WHATSAPP_APP_SECRET ?? env.META_APP_SECRET)) {
+      return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Bad signature' } });
+    }
     const body = req.body as {
       entry?: {
         changes?: {

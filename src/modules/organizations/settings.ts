@@ -50,11 +50,20 @@ function handle(fn: (req: Request, res: Response, next: NextFunction) => Promise
   };
 }
 
+// Secrets are write-only: the token is replaced by a boolean so clients know
+// one is configured without ever receiving it back.
+function presentSettings(row: typeof organizationSettings.$inferSelect | undefined) {
+  if (!row) return {};
+  const { telegramBotToken, ...rest } = row;
+  return { ...rest, telegramBotConfigured: Boolean(telegramBotToken) };
+}
+
 router.get(
   '/settings',
   authenticate,
   handle(async (req, res) => {
     const auth = req.auth;
+    requirePermission(auth, 'organization.read');
     if (!auth.organizationId)
       return res
         .status(400)
@@ -64,7 +73,7 @@ router.get(
       .from(organizationSettings)
       .where(eq(organizationSettings.organizationId, auth.organizationId))
       .limit(1);
-    return res.json(row ?? {});
+    return res.json(presentSettings(row));
   })
 );
 
@@ -106,7 +115,7 @@ router.patch(
       resourceId: auth.organizationId,
       metadata: { fields: Object.keys(updates) },
     });
-    return res.json(row);
+    return res.json(presentSettings(row));
   })
 );
 

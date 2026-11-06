@@ -1,5 +1,6 @@
 import { NextFunction, Request, Response, Router } from 'express';
-import { parseMetaMessaging, verifyMetaWebhook } from '../meta/common';
+import { env } from '../../../config/env';
+import { parseMetaMessaging, verifyMetaSignature, verifyMetaWebhook } from '../meta/common';
 import { handleInboundMessengerText } from './service';
 
 const router = Router();
@@ -17,6 +18,9 @@ router.get('/messenger', verifyMetaWebhook);
 router.post(
   '/messenger',
   handle(async (req, res) => {
+    if (!verifyMetaSignature(req, env.META_APP_SECRET)) {
+      return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Bad signature' } });
+    }
     const results: { accepted: number } = { accepted: 0 };
     for (const entry of parseMetaMessaging(req.body)) {
       const pageId = entry.id;

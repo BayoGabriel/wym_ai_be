@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { authenticate } from '../auth/middleware';
 import { requirePermission } from '../rbac/authz';
 import { db } from '../../database/client';
-import { organizationProducts, products } from '../../database/schema/core';
+import { organizationProducts, organizations, products } from '../../database/schema/core';
 import { and, eq } from 'drizzle-orm';
 import { z } from 'zod';
 import { validate } from '../../middleware/validate';
@@ -34,21 +34,24 @@ router.post('/products', authenticate, validate(createProductSchema), async (req
   const auth = req.auth;
   requirePermission(auth, 'platform.manage');
   const body = req.body;
-  try {
-    const [row] = await db.insert(products).values(body).returning();
-    await recordAudit({
-      actorUserId: auth.userId,
-      action: 'product.created',
-      resourceType: 'product',
-      resourceId: row.id,
-      metadata: { code: row.code },
-    });
-    return res.status(201).json(row);
-  } catch {
+  const [existing] = await db
+    .select({ id: products.id })
+    .from(products)
+    .where(eq(products.code, body.code))
+    .limit(1);
+  if (existing)
     return res
       .status(409)
       .json({ error: { code: 'PRODUCT_CODE_EXISTS', message: 'Product code must be unique' } });
-  }
+  const [row] = await db.insert(products).values(body).returning();
+  await recordAudit({
+    actorUserId: auth.userId,
+    action: 'product.created',
+    resourceType: 'product',
+    resourceId: row.id,
+    metadata: { code: row.code },
+  });
+  return res.status(201).json(row);
 });
 
 router.post('/products/assign', authenticate, validate(assignSchema), async (req, res) => {
@@ -62,6 +65,15 @@ router.post('/products/assign', authenticate, validate(assignSchema), async (req
   const [p] = await db.select().from(products).where(eq(products.code, body.productCode)).limit(1);
   if (!p)
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Product not found' } });
+  const [org] = await db
+    .select({ id: organizations.id })
+    .from(organizations)
+    .where(eq(organizations.id, body.organizationId))
+    .limit(1);
+  if (!org)
+    return res
+      .status(404)
+      .json({ error: { code: 'NOT_FOUND', message: 'Organization not found' } });
   if (!p.active && body.status === 'active')
     return res
       .status(400)

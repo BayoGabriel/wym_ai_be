@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'crypto';
 import { Request, Response } from 'express';
 import { env } from '../../../config/env';
 
@@ -20,6 +21,21 @@ export function verifyMetaWebhook(req: Request, res: Response) {
   return res.status(403).json({ error: { code: 'FORBIDDEN', message: 'Verification failed' } });
 }
 
+// X-Hub-Signature-256 check for inbound webhook POSTs. When no app secret is
+// configured the check is skipped — set META_APP_SECRET / WHATSAPP_APP_SECRET
+// in production so forged inbound events are rejected.
+export function verifyMetaSignature(req: Request, appSecret: string | undefined): boolean {
+  if (!appSecret) return true;
+  const header = req.headers['x-hub-signature-256'];
+  if (typeof header !== 'string' || !header.startsWith('sha256=') || !req.rawBody) {
+    return false;
+  }
+  const expected = `sha256=${createHmac('sha256', appSecret).update(req.rawBody).digest('hex')}`;
+  const provided = Buffer.from(header);
+  const wanted = Buffer.from(expected);
+  return provided.length === wanted.length && timingSafeEqual(provided, wanted);
+}
+
 // Sends a text reply through the Meta Send API — one endpoint serves both
 // Messenger and Instagram; the page/professional account access token decides
 // which surface the message lands on.
@@ -32,10 +48,13 @@ export async function sendMetaText(params: {
   const timeout = setTimeout(() => controller.abort(), env.NOTIFICATION_TIMEOUT_MS);
   try {
     const res = await fetch(
-      `https://graph.facebook.com/${env.META_GRAPH_VERSION}/me/messages?access_token=${encodeURIComponent(params.accessToken)}`,
+      `https://graph.facebook.com/${env.META_GRAPH_VERSION}/me/messages`,
       {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${params.accessToken}`,
+        },
         body: JSON.stringify({
           recipient: { id: params.recipientId },
           message: { text: params.text.slice(0, 2000) },

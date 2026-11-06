@@ -5,6 +5,7 @@ import { db } from '../../database/client';
 import { organizations, users, userRoles, roles } from '../../database/schema/core';
 import { eq } from 'drizzle-orm';
 import {
+  hashPassword,
   issueTokens,
   revokeRefreshToken,
   rotateRefreshToken,
@@ -51,7 +52,6 @@ router.post('/register', validate(registerSchema), handle(async (req, res) => {
       .status(409)
       .json({ error: { code: 'ORG_EXISTS', message: 'Organization slug already exists' } });
 
-  const { hashPassword, issueTokens } = await import('./service');
   const passwordHash = await hashPassword(password);
 
   // Org + user + role must be created atomically — a partial signup must not

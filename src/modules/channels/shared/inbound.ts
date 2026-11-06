@@ -41,7 +41,7 @@ export async function handleInboundChannelText(params: {
     )
     .limit(1);
 
-  if (!conversation || conversation.status !== 'ACTIVE') {
+  if (!conversation) {
     [conversation] = await db
       .insert(conversations)
       .values({
@@ -51,6 +51,14 @@ export async function handleInboundChannelText(params: {
         externalSessionId: params.externalSessionId,
         title: params.title,
       })
+      .returning();
+  } else if (conversation.status !== 'ACTIVE') {
+    // externalSessionId is unique per org — a new inbound on a closed/archived
+    // conversation reopens it rather than inserting a duplicate row.
+    [conversation] = await db
+      .update(conversations)
+      .set({ status: 'ACTIVE', updatedAt: new Date() })
+      .where(eq(conversations.id, conversation.id))
       .returning();
   }
 

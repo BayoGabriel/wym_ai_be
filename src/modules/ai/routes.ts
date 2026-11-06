@@ -6,6 +6,7 @@ import { validate } from '../../middleware/validate';
 import { z } from 'zod';
 import { organizationHasProduct } from '../products/service';
 import { generateResponse } from './service';
+import { env } from '../../config/env';
 
 const router = Router();
 
@@ -59,7 +60,7 @@ router.post(
     } catch {
       return res.status(200).json({
         message:
-          process.env.AI_FALLBACK_MESSAGE ||
+          env.AI_FALLBACK_MESSAGE ||
           "I'm having trouble responding right now. Please try again shortly.",
         grounded: false,
         sources: [],

@@ -7,3 +7,8 @@ Dockerfile*
 dist
 coverage
 .drizzle
+.env
+.env.*
+storage/
+*.mjs
+nul

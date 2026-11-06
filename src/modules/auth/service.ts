@@ -4,7 +4,7 @@ import { createHash, randomBytes } from 'crypto';
 import { env } from '../../config/env';
 import { db } from '../../database/client';
 import { refreshTokens } from '../../database/schema/core';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, gt } from 'drizzle-orm';
 
 export type Tokens = { accessToken: string; refreshToken: string };
 
@@ -73,7 +73,13 @@ export async function rotateRefreshToken(userId: string, oldToken: string) {
   const existing = await db
     .select()
     .from(refreshTokens)
-    .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.tokenHash, oldHash)))
+    .where(
+      and(
+        eq(refreshTokens.userId, userId),
+        eq(refreshTokens.tokenHash, oldHash),
+        gt(refreshTokens.expiresAt, new Date())
+      )
+    )
     .limit(1);
   if (existing.length === 0) throw new Error('Invalid refresh token');
   // Revoke by deleting or marking revoked; keep simple: delete
@@ -99,6 +105,7 @@ export function verifyAccessToken(
   options?: { ignoreExpiration?: boolean }
 ): { sub: string; org?: string | null } {
   return jwt.verify(token, env.JWT_ACCESS_SECRET, {
+    algorithms: ['HS256'],
     ignoreExpiration: options?.ignoreExpiration ?? false,
   }) as { sub: string; org?: string | null };
 }

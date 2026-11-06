@@ -3,7 +3,7 @@ import { db } from '../../database/client';
 import { roles, userRoles, users } from '../../database/schema/core';
 import { and, eq, inArray } from 'drizzle-orm';
 import { ApiError } from '../../middleware/error';
-import { requirePermission, requireOrgScope } from '../rbac/authz';
+import { requirePermission } from '../rbac/authz';
 import { hashPassword } from '../auth/service';
 import { recordAudit } from '../audit/service';
 import { AuthContext } from '../../types/auth';
@@ -70,9 +70,10 @@ export async function getUser(req: Request, res: Response) {
   requirePermission(auth, 'user.read');
   const { id } = req.params as { id: string };
   const [user] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  if (!user)
+  // Out-of-scope lookups return 404 so callers can't distinguish "user exists
+  // in another org" from "user does not exist" by status code.
+  if (!user || (!auth.platformAccess && user.organizationId !== auth.organizationId))
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'User not found' } });
-  if (!auth.platformAccess) requireOrgScope(auth, user.organizationId!);
   const roleMap = await rolesForUsers([user.id]);
   return res.json(publicUser(user, roleMap.get(user.id) ?? []));
 }
@@ -96,6 +97,16 @@ export async function createUser(req: Request, res: Response) {
     });
   }
   const role = body.roleName ? await resolveAssignableRole(auth, body.roleName, targetOrgId) : null;
+
+  const [emailTaken] = await db
+    .select({ id: users.id })
+    .from(users)
+    .where(eq(users.email, body.email))
+    .limit(1);
+  if (emailTaken)
+    return res
+      .status(409)
+      .json({ error: { code: 'EMAIL_EXISTS', message: 'Email already registered' } });
 
   const passwordHash = await hashPassword(body.password);
   const [user] = await db
@@ -131,9 +142,8 @@ export async function updateUser(req: Request, res: Response) {
   requirePermission(auth, 'user.update');
   const { id } = req.params as { id: string };
   const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
-  if (!existing)
+  if (!existing || (!auth.platformAccess && existing.organizationId !== auth.organizationId))
     return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'User not found' } });
-  if (!auth.platformAccess) requireOrgScope(auth, existing.organizationId!);
   const body = req.body as Partial<{
     name: string;
     password: string;
@@ -147,27 +157,33 @@ export async function updateUser(req: Request, res: Response) {
   const [user] = await db.update(users).set(updates).where(eq(users.id, id)).returning();
 
   // roleName replaces the user's organization-scope roles; null clears them.
-  // Platform-scope assignments are never touched by this path.
+  // Platform-scope assignments are never touched by this path. The role is
+  // resolved before any rows are touched, and the swap is atomic, so an
+  // invalid role can never leave the user roleless.
   if (body.roleName !== undefined) {
-    await db
-      .delete(userRoles)
-      .where(
-        and(
-          eq(userRoles.userId, existing.id),
-          inArray(
-            userRoles.roleId,
-            db.select({ id: roles.id }).from(roles).where(eq(roles.scope, 'organization'))
+    const role = body.roleName
+      ? await resolveAssignableRole(auth, body.roleName, existing.organizationId)
+      : null;
+    await db.transaction(async (tx) => {
+      await tx
+        .delete(userRoles)
+        .where(
+          and(
+            eq(userRoles.userId, existing.id),
+            inArray(
+              userRoles.roleId,
+              db.select({ id: roles.id }).from(roles).where(eq(roles.scope, 'organization'))
+            )
           )
-        )
-      );
-    if (body.roleName) {
-      const role = await resolveAssignableRole(auth, body.roleName, existing.organizationId);
-      await db.insert(userRoles).values({
-        userId: existing.id,
-        roleId: role.id,
-        organizationId: role.scope === 'platform' ? null : existing.organizationId,
-      });
-    }
+        );
+      if (role) {
+        await tx.insert(userRoles).values({
+          userId: existing.id,
+          roleId: role.id,
+          organizationId: role.scope === 'platform' ? null : existing.organizationId,
+        });
+      }
+    });
     await recordAudit({
       organizationId: existing.organizationId,
       actorUserId: auth.userId,

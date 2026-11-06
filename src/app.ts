@@ -26,6 +26,8 @@ import flowRoutes from './modules/flow/routes';
 import adminRoutes from './modules/admin/routes';
 import publicAssistRoutes from './modules/public/routes';
 import channelWebhookRoutes from './modules/channels/routes';
+import swaggerUi from 'swagger-ui-express';
+import { openApiSpec } from './docs/openapi';
 import { env } from './config/env';
 
 export function createApp() {
@@ -34,8 +36,23 @@ export function createApp() {
   app.set('trust proxy', env.TRUST_PROXY);
 
   app.use(helmet());
-  app.use(cors());
-  app.use(express.json());
+
+  const corsOrigins = env.CORS_ORIGINS.split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+  app.use(cors({ origin: corsOrigins.length ? corsOrigins : true }));
+
+  // Base64 PDF uploads are ~4/3 the document size; the limit must exceed
+  // MAX_KNOWLEDGE_DOCUMENT_SIZE_MB or uploads are rejected before validation.
+  // `verify` keeps the raw body so webhook handlers can verify HMAC signatures.
+  app.use(
+    express.json({
+      limit: `${Math.ceil(env.MAX_KNOWLEDGE_DOCUMENT_SIZE_MB * 1.5)}mb`,
+      verify: (req, _res, buf) => {
+        (req as Request).rawBody = buf;
+      },
+    })
+  );
   app.use(requestLogger);
 
   const authLimiter = rateLimit({ windowMs: 60 * 1000, max: 20 });
@@ -57,6 +74,23 @@ export function createApp() {
   });
   app.use('/widget', express.static(widgetDir, { maxAge: '1h', index: false }));
   app.use('/api/v1/webhooks', channelWebhookRoutes);
+
+  // Interactive API documentation (Swagger UI) + raw OpenAPI JSON.
+  // Disabled by default in production; set ENABLE_API_DOCS=true to expose.
+  if (env.ENABLE_API_DOCS) {
+    // helmet's default CSP blocks Swagger UI's inline init script and styles —
+    // relax it for the docs pages only.
+    app.use('/api/docs', (_req, res, next) => {
+      res.setHeader(
+        'Content-Security-Policy',
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:"
+      );
+      next();
+    });
+    app.get('/api/docs.json', (_req: Request, res: Response) => res.json(openApiSpec));
+    app.use('/api/docs', swaggerUi.serve, swaggerUi.setup(openApiSpec));
+  }
+
   app.use('/api/v1/organizations', orgSettingsRoutes);
   app.use('/api/v1/organizations', orgRoutes);
   app.use('/api/v1/users', userRoutes);

@@ -1,5 +1,5 @@
 import request from 'supertest';
-import { createApp } from '../src/app';
+import { createApp } from '../../app';
 import { describe, it, expect } from 'vitest';
 
 describe('GET /api/v1/health', () => {
