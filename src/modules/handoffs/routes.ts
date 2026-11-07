@@ -1,4 +1,5 @@
 import { NextFunction, Request, Response, Router } from 'express';
+import { z } from 'zod';
 import { authenticate } from '../auth/middleware';
 import { requirePermission } from '../rbac/authz';
 import { validate } from '../../middleware/validate';
@@ -17,6 +18,7 @@ import {
   assignHandoff,
   cancelHandoff,
   claimHandoff,
+  createStaffHandoff,
   getHandoffById,
   listHandoffs,
   replyToHandoff,
@@ -87,6 +89,24 @@ router.get(
       order: query.order,
     });
     res.json(response);
+  })
+);
+
+router.post(
+  '/handoffs',
+  validate(z.object({ conversationId: z.string().uuid(), reason: z.string().max(500).optional() })),
+  handle(async (req, res) => {
+    const auth = authOf(req);
+    requirePermission(auth, 'handoff.write');
+    await ensureAssistEntitlement(auth);
+
+    const handoff = await createStaffHandoff({
+      organizationId: auth.organizationId!,
+      userId: auth.userId,
+      conversationId: (req.body as { conversationId: string }).conversationId,
+      reason: (req.body as { reason?: string }).reason,
+    });
+    res.status(201).json(handoff);
   })
 );
 

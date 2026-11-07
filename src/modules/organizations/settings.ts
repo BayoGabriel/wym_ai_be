@@ -14,7 +14,7 @@ const emptyToNull = (v: unknown) => (v === '' ? null : v);
 const nullableField = <S extends z.ZodType>(schema: S) =>
   z.preprocess(emptyToNull, schema.nullable()).optional();
 
-const updateSettingsSchema = z.object({
+export const updateSettingsSchema = z.object({
   businessName: nullableField(z.string().min(1).max(255)),
   businessCategory: nullableField(z.string().min(1).max(255)),
   website: nullableField(z.string().url().max(512)),
@@ -52,7 +52,7 @@ function handle(fn: (req: Request, res: Response, next: NextFunction) => Promise
 
 // Secrets are write-only: the token is replaced by a boolean so clients know
 // one is configured without ever receiving it back.
-function presentSettings(row: typeof organizationSettings.$inferSelect | undefined) {
+export function presentSettings(row: typeof organizationSettings.$inferSelect | undefined) {
   if (!row) return {};
   const { telegramBotToken, ...rest } = row;
   return { ...rest, telegramBotConfigured: Boolean(telegramBotToken) };

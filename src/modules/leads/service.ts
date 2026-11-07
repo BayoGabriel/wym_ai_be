@@ -1,4 +1,4 @@
-import { and, asc, count, desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq, ilike, or } from 'drizzle-orm';
 import { db } from '../../database/client';
 import {
   assistantConfigurations,
@@ -237,6 +237,7 @@ export async function captureLeadFromPublicSession(params: {
       event: 'lead.created',
       subject: 'New enquiry captured via WymAssist',
       text: `A visitor shared their details${params.name ? ` (${params.name})` : ''} during a chat.`,
+      link: '/dashboard/assist/leads',
     });
   }
 
@@ -255,6 +256,7 @@ export async function listLeads(params: {
   source?: string;
   category?: string;
   assignedTo?: string;
+  q?: string;
   order: 'asc' | 'desc';
 }) {
   const conditions = [eq(leads.organizationId, params.organizationId)];
@@ -262,6 +264,17 @@ export async function listLeads(params: {
   if (params.source) conditions.push(eq(leads.source, params.source));
   if (params.category) conditions.push(eq(leads.enquiryCategory, params.category));
   if (params.assignedTo) conditions.push(eq(leads.assignedTo, params.assignedTo));
+  if (params.q) {
+    const like = `%${params.q}%`;
+    conditions.push(
+      or(
+        ilike(leads.name, like),
+        ilike(leads.email, like),
+        ilike(leads.phone, like),
+        ilike(leads.summary, like)
+      )!
+    );
+  }
   const where = and(...conditions);
 
   const rows = await db

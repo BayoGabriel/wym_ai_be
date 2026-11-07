@@ -6,6 +6,7 @@ import {
   users,
 } from '../../database/schema/core';
 import { getNotificationProvider } from './provider';
+import { writeInAppNotifications } from './inapp';
 
 export type StaffEvent = 'lead.created' | 'handoff.requested' | 'appointment.requested';
 
@@ -66,7 +67,17 @@ export async function notifyOrganization(params: {
   event: StaffEvent;
   subject: string;
   text: string;
+  link?: string;
 }) {
+  // In-app bell notifications are always recorded for active staff; the
+  // notifyOn* flags gate email delivery only.
+  void writeInAppNotifications({
+    organizationId: params.organizationId,
+    event: params.event,
+    title: params.subject,
+    body: params.text,
+    link: params.link,
+  });
   try {
     const [config] = await db
       .select()
@@ -97,6 +108,7 @@ export async function notifyOrgDirect(params: {
   subject: string;
   text: string;
   to?: string;
+  link?: string;
 }) {
   try {
     let to: string[];
@@ -118,6 +130,38 @@ export async function notifyOrgDirect(params: {
      
     console.error(
       `[notification] failed for org ${params.organizationId}:`,
+      err instanceof Error ? err.message : err
+    );
+  }
+  // Mirror the alert into the in-app inbox. When `to` targets a specific
+  // address we only notify that staff member; otherwise everyone active.
+  try {
+    let userIds: string[] | undefined;
+    if (params.to) {
+      const [u] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(
+          and(
+            eq(users.organizationId, params.organizationId),
+            eq(users.email, params.to),
+            eq(users.status, 'active')
+          )
+        )
+        .limit(1);
+      userIds = u ? [u.id] : [];
+    }
+    void writeInAppNotifications({
+      organizationId: params.organizationId,
+      event: params.event,
+      title: params.subject,
+      body: params.text,
+      link: params.link,
+      userIds,
+    });
+  } catch (err) {
+    console.error(
+      `[notification] in-app write failed for org ${params.organizationId}:`,
       err instanceof Error ? err.message : err
     );
   }

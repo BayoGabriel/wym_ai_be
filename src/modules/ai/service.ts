@@ -3,6 +3,9 @@ import { env } from '../../config/env';
 import { buildContextBlock, buildConversationHistoryBlock, buildSystemPrompt } from './prompt';
 import { getLLMProvider } from './provider';
 import { recordAudit } from '../audit/service';
+import { db } from '../../database/client';
+import { assistantConfigurations } from '../../database/schema/core';
+import { eq } from 'drizzle-orm';
 
 export type AIRequest = {
   organizationId: string;
@@ -30,7 +33,21 @@ export async function generateResponse(req: AIRequest): Promise<AIResponse> {
   });
 
   const hasKnowledge = (retrieval.results?.length ?? 0) > 0;
-  const system = buildSystemPrompt();
+  const [config] = await db
+    .select({ guardrails: assistantConfigurations.guardrails })
+    .from(assistantConfigurations)
+    .where(eq(assistantConfigurations.organizationId, req.organizationId))
+    .limit(1);
+  const guardrails = (config?.guardrails ?? null) as {
+    fallbackMessage?: string;
+    escalationTriggers?: string[];
+    restrictedTopics?: string[];
+    medicalSafetyMode?: boolean;
+  } | null;
+  const system = buildSystemPrompt({
+    restrictedTopics: guardrails?.restrictedTopics,
+    medicalSafetyMode: guardrails?.medicalSafetyMode,
+  });
   const knowledgeContext = hasKnowledge
     ? buildContextBlock({
         retrievedKnowledge: retrieval.results.map((r) => ({
@@ -56,8 +73,9 @@ export async function generateResponse(req: AIRequest): Promise<AIResponse> {
   });
 
   const grounded = hasKnowledge && !!knowledgeContext;
+  const fallback = guardrails?.fallbackMessage?.trim() || env.AI_FALLBACK_MESSAGE;
   const response: AIResponse = {
-    message: llmRes.text || (hasKnowledge ? env.AI_FALLBACK_MESSAGE : env.AI_FALLBACK_MESSAGE),
+    message: llmRes.text || fallback,
     grounded,
     sources: (retrieval.results || []).map((r) => ({
       chunkId: r.chunkId,

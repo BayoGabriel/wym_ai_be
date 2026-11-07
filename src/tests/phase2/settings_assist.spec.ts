@@ -20,7 +20,17 @@ async function ensureOrg(name: string, slug: string) {
 
 async function ensureUser(email: string, organizationId: string | null) {
   const existing = await db.select().from(users).where(eq(users.email, email)).limit(1);
-  if (existing.length) return existing[0];
+  if (existing.length) {
+    if (existing[0].status !== 'active') {
+      const [reactivated] = await db
+        .update(users)
+        .set({ status: 'active' })
+        .where(eq(users.id, existing[0].id))
+        .returning();
+      return reactivated;
+    }
+    return existing[0];
+  }
   const passwordHash = await hashPassword('Passw0rd!');
   const [u] = await db
     .insert(users)
@@ -45,6 +55,7 @@ describe('Organization settings & Assist configuration', () => {
     const uStaff = await ensureUser('staffA@example.com', orgA.id);
 
     const adminRole = await ensureRole('Settings Admin', 'organization');
+    await grantRolePermission(adminRole.id, 'organization.read');
     await grantRolePermission(adminRole.id, 'organization.update');
     await assignUserRole({ userId: uA.id, roleId: adminRole.id, organizationId: orgA.id });
     await assignUserRole({ userId: uB.id, roleId: adminRole.id, organizationId: orgB.id });

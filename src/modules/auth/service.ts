@@ -3,8 +3,8 @@ import jwt, { SignOptions } from 'jsonwebtoken';
 import { createHash, randomBytes } from 'crypto';
 import { env } from '../../config/env';
 import { db } from '../../database/client';
-import { refreshTokens } from '../../database/schema/core';
-import { eq, and, gt } from 'drizzle-orm';
+import { passwordResetTokens, refreshTokens, users } from '../../database/schema/core';
+import { eq, and, gt, isNull } from 'drizzle-orm';
 
 export type Tokens = { accessToken: string; refreshToken: string };
 
@@ -100,12 +100,66 @@ export async function revokeRefreshToken(userId: string, token: string) {
     .where(and(eq(refreshTokens.userId, userId), eq(refreshTokens.tokenHash, oldHash)));
 }
 
+// Password reset tokens are random 48-byte hex strings; only the sha256 hash
+// is persisted so a database leak cannot be used to reset passwords.
+export async function createPasswordResetToken(
+  userId: string,
+  ttlMinutes = env.PASSWORD_RESET_TOKEN_TTL_MINUTES
+): Promise<string> {
+  const token = randomBytes(48).toString('hex');
+  const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
+  await db
+    .insert(passwordResetTokens)
+    .values({ userId, tokenHash: createSha256(token), expiresAt });
+  return token;
+}
+
+// Consumes a reset token: updates the password, marks the token used, and
+// revokes every refresh token so existing sessions cannot persist with the
+// old credentials.
+export async function resetPasswordWithToken(token: string, password: string): Promise<void> {
+  const tokenHash = createSha256(token);
+  const [row] = await db
+    .select()
+    .from(passwordResetTokens)
+    .where(
+      and(
+        eq(passwordResetTokens.tokenHash, tokenHash),
+        isNull(passwordResetTokens.usedAt),
+        gt(passwordResetTokens.expiresAt, new Date())
+      )
+    )
+    .limit(1);
+  if (!row) throw new Error('Invalid or expired reset token');
+
+  const passwordHash = await hashPassword(password);
+  await db.transaction(async (tx) => {
+    await tx.update(users).set({ passwordHash }).where(eq(users.id, row.userId));
+    await tx
+      .update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(passwordResetTokens.id, row.id));
+    await tx.delete(refreshTokens).where(eq(refreshTokens.userId, row.userId));
+  });
+}
+
 export function verifyAccessToken(
   token: string,
   options?: { ignoreExpiration?: boolean }
-): { sub: string; org?: string | null } {
+): { sub: string; org?: string | null; imp?: string } {
   return jwt.verify(token, env.JWT_ACCESS_SECRET, {
     algorithms: ['HS256'],
     ignoreExpiration: options?.ignoreExpiration ?? false,
-  }) as { sub: string; org?: string | null };
+  }) as { sub: string; org?: string | null; imp?: string };
+}
+
+/** Issues a short-lived view-as token for platform admins. The `imp` claim
+ *  carries the real admin's user id so every impersonated action is auditable. */
+export function issueImpersonationToken(params: { userId: string; organizationId: string; adminUserId: string }) {
+  const options: SignOptions = { algorithm: 'HS256', expiresIn: '30m' };
+  return jwt.sign(
+    { sub: params.userId, org: params.organizationId, imp: params.adminUserId },
+    env.JWT_ACCESS_SECRET,
+    options
+  );
 }

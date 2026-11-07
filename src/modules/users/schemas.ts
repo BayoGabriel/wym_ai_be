@@ -13,5 +13,6 @@ export const updateUserSchema = z.object({
   name: z.string().min(2).optional(),
   password: z.string().min(8).optional(),
   status: z.enum(['active', 'suspended']).optional(),
+  department: z.string().max(120).nullable().optional(),
   roleName: z.string().min(1).max(64).nullable().optional(),
 });

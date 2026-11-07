@@ -20,9 +20,10 @@ export const captureLeadSchema = z.object({
 
 export const listLeadsQuerySchema = z.object({
   page: z.coerce.number().int().min(1).default(1),
-  limit: z.coerce.number().int().min(1).max(100).default(20),
+  limit: z.coerce.number().int().min(1).max(250).default(20),
   status: z.enum(LEAD_STATUSES).optional(),
   source: z.string().max(64).optional(),
+  q: z.string().trim().min(1).max(120).optional(),
   category: z.enum(LEAD_CATEGORIES).optional(),
   assignedTo: z.string().uuid().optional(),
   order: z.enum(['asc', 'desc']).default('desc'),

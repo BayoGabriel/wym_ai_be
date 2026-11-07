@@ -4,7 +4,7 @@ import { authenticate } from '../auth/middleware';
 import { requirePermission } from '../rbac/authz';
 import { db } from '../../database/client';
 import { knowledgeDocuments, knowledgeItems } from '../../database/schema/core';
-import { and, eq, ilike, or } from 'drizzle-orm';
+import { and, eq, ilike, or, sql } from 'drizzle-orm';
 import { validate } from '../../middleware/validate';
 import {
   createTextKnowledgeSchema,
@@ -13,7 +13,7 @@ import {
   uploadPdfSchema,
 } from './validation';
 import { recordAudit } from '../audit/service';
-import { organizationHasProduct } from '../products/service';
+import { enforcePlanLimit, organizationHasProduct } from '../products/service';
 import { initStorage, savePdfBuffer } from './storage';
 import { env } from '../../config/env';
 import { processKnowledgeItem } from './processing/processor';
@@ -38,6 +38,19 @@ async function ensureAssistEntitlement(auth: AuthContext) {
     err.code = 'FORBIDDEN';
     throw err;
   }
+}
+
+async function enforceKnowledgeLimit(organizationId: string) {
+  const [row] = await db
+    .select({ value: sql<number>`count(*)` })
+    .from(knowledgeItems)
+    .where(eq(knowledgeItems.organizationId, organizationId));
+  await enforcePlanLimit(
+    organizationId,
+    'maxKnowledgeItems',
+    Number(row?.value ?? 0),
+    'knowledge items'
+  );
 }
 
 router.get(
@@ -85,6 +98,7 @@ router.post(
     const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
+    await enforceKnowledgeLimit(auth.organizationId!);
     const body = req.body;
     const [row] = await db
       .insert(knowledgeItems)
@@ -197,6 +211,34 @@ router.delete(
   })
 );
 
+// Questions the assistant answered without grounding — drives the
+// "Answer this" flow that turns gaps into FAQ entries.
+router.get(
+  '/knowledge/gaps',
+  handle(async (req, res) => {
+    const auth = req.auth;
+    requirePermission(auth, 'knowledge.read');
+    await ensureAssistEntitlement(auth);
+    const rows = await db.execute(sql`
+      SELECT q.content AS question,
+             q.conversation_id AS "conversationId",
+             count(*) AS times,
+             max(q.created_at) AS "lastAskedAt"
+      FROM messages a
+      JOIN messages q
+        ON q.id = (a.metadata::jsonb ->> 'respondingToMessageId')::uuid
+      WHERE a.organization_id = ${auth.organizationId!}
+        AND a.role = 'ASSISTANT'
+        AND a.grounded = false
+        AND q.role = 'USER'
+      GROUP BY q.content, q.conversation_id
+      ORDER BY times DESC, "lastAskedAt" DESC
+      LIMIT 50
+    `);
+    res.json({ items: rows.rows });
+  })
+);
+
 router.post(
   '/knowledge/documents',
   validate(uploadPdfSchema),
@@ -204,6 +246,7 @@ router.post(
     const auth = req.auth;
     requirePermission(auth, 'knowledge.write');
     await ensureAssistEntitlement(auth);
+    await enforceKnowledgeLimit(auth.organizationId!);
     const body = req.body;
     // Validate base64 and size
     const buf = Buffer.from(body.base64, 'base64');
@@ -211,11 +254,13 @@ router.post(
     if (buf.length > maxBytes)
       return res
         .status(400)
-        .json({ error: { code: 'FILE_TOO_LARGE', message: 'PDF exceeds maximum size' } });
-    // Check magic bytes for PDF: starts with %PDF-
-    const header = buf.subarray(0, 5).toString('ascii');
-    if (header !== '%PDF-')
-      return res.status(400).json({ error: { code: 'INVALID_PDF', message: 'Invalid PDF file' } });
+        .json({ error: { code: 'FILE_TOO_LARGE', message: 'File exceeds maximum size' } });
+    // Magic-byte check only for PDFs; other formats are validated at extraction.
+    if (body.mimeType === 'application/pdf') {
+      const header = buf.subarray(0, 5).toString('ascii');
+      if (header !== '%PDF-')
+        return res.status(400).json({ error: { code: 'INVALID_PDF', message: 'Invalid PDF file' } });
+    }
     await initStorage();
     const storageKey = await savePdfBuffer(auth.organizationId!, body.fileName, buf);
     // Create knowledge item + document

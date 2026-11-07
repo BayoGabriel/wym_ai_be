@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { normalizeText } from './normalizer';
 import { chunkText } from './chunker';
 import { readPdf } from '../storage';
-import { extractTextFromPdf } from './pdf-extractor';
+import { extractTextFromBuffer } from './extractors';
 import { recordAudit } from '../../audit/service';
 
 export async function processKnowledgeItem(params: {
@@ -66,9 +66,13 @@ export async function processKnowledgeItem(params: {
         .limit(1);
       if (!doc) throw new Error('Document metadata missing');
       const buf = await readPdf(doc.storageKey);
-      const extracted = await extractTextFromPdf(buf);
+      const extracted = await extractTextFromBuffer(
+        buf,
+        doc.mimeType ?? 'application/pdf',
+        doc.originalFilename ?? ''
+      );
       const raw = extracted.text || '';
-      if (!raw.trim()) throw new Error('No extractable text in PDF');
+      if (!raw.trim()) throw new Error('No extractable text in document');
       // split pages on form-feed if present, otherwise treat as single page
       const pages = raw.split('\f');
       const values: (typeof knowledgeChunks.$inferInsert)[] = [];

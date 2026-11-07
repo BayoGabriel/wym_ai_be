@@ -9,4 +9,6 @@ export type AuthContext = {
   }[];
   permissions: string[];
   platformAccess: boolean;
+  /** Set when the caller is a platform admin viewing as another user. */
+  impersonatedBy?: string;
 };

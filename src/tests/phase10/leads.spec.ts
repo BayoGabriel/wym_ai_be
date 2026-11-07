@@ -323,7 +323,10 @@ describe.sequential('Phase 10: customer identity and lead capture', () => {
       .set('Authorization', `Bearer ${staffAToken}`);
     expect(unfiltered.status).toBe(200);
     const orgALeads = await db.select().from(leads).where(eq(leads.organizationId, orgA.id));
-    expect(unfiltered.body.items.length).toBe(orgALeads.length);
+    // The endpoint caps page size at the requested limit — the shared fixture
+    // DB can accumulate more leads than fit on one page across reruns.
+    expect(unfiltered.body.items.length).toBe(Math.min(orgALeads.length, 100));
+    expect(unfiltered.body.total).toBe(orgALeads.length);
   });
 
   it('enforces lead.read permission for listing', async () => {

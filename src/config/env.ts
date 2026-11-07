@@ -21,6 +21,9 @@ const envSchema = z.object({
   JWT_REFRESH_SECRET: z.string().min(16),
   ACCESS_TOKEN_TTL: z.string().default('15m'),
   REFRESH_TOKEN_TTL: z.string().default('30d'),
+  // Public web app origin used to build password-reset links in emails.
+  APP_BASE_URL: z.string().url().default('http://localhost:5173'),
+  PASSWORD_RESET_TOKEN_TTL_MINUTES: z.coerce.number().int().positive().default(60),
   BCRYPT_SALT_ROUNDS: z.coerce.number().int().min(8).max(14).default(10),
   MAX_KNOWLEDGE_DOCUMENT_SIZE_MB: z.coerce.number().int().positive().default(10),
   MAX_KNOWLEDGE_TEXT_LENGTH: z.coerce.number().int().positive().default(20000),

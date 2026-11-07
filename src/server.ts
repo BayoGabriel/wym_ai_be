@@ -1,7 +1,9 @@
 import { env } from './config/env';
 import { createApp } from './app';
+import { startReportScheduler } from './modules/reports/schedules';
 
 const app = createApp();
+startReportScheduler();
 
 const server = app.listen(env.PORT, () => {
   // eslint-disable-next-line no-console

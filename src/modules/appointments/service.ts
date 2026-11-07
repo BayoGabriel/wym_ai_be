@@ -93,6 +93,33 @@ export async function requestAppointmentFromPublicSession(params: {
     throw new ApiError(403, 'APPOINTMENTS_DISABLED', 'Appointment requests are not enabled');
   }
 
+  // Structured availability rules configured in the appointments UI. When a
+  // rule set exists the requested slot must fall inside it.
+  const availability = config.availability as
+    | {
+        days?: number[];
+        open?: string;
+        close?: string;
+        blackoutDates?: string[];
+      }
+    | null
+    | undefined;
+  if (availability && (availability.days || availability.open || availability.close)) {
+    const day = new Date(`${params.preferredDate}T00:00:00Z`).getUTCDay();
+    if (availability.days && availability.days.length > 0 && !availability.days.includes(day)) {
+      throw new ApiError(400, 'OUTSIDE_AVAILABILITY', 'That day is not available for bookings');
+    }
+    if (availability.blackoutDates?.includes(params.preferredDate)) {
+      throw new ApiError(400, 'OUTSIDE_AVAILABILITY', 'That date is not available for bookings');
+    }
+    if (availability.open && params.preferredTime < availability.open) {
+      throw new ApiError(400, 'OUTSIDE_AVAILABILITY', 'Requested time is before opening hours');
+    }
+    if (availability.close && params.preferredTime >= availability.close) {
+      throw new ApiError(400, 'OUTSIDE_AVAILABILITY', 'Requested time is after closing hours');
+    }
+  }
+
   const email = params.email ? normalizeEmail(params.email) : undefined;
   const phone = params.phone ? normalizePhone(params.phone) : undefined;
   if (!email && !phone) {
@@ -173,6 +200,7 @@ export async function requestAppointmentFromPublicSession(params: {
       event: 'appointment.requested',
       subject: 'New appointment request via WymAssist',
       text: `${appointment.customerName} requested ${appointment.preferredDate} at ${appointment.preferredTime}.`,
+      link: '/dashboard/assist/appointments',
     });
   }
 

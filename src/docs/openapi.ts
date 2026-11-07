@@ -373,11 +373,35 @@ const paths: Paths = {
               items: obj({
                 key: str(),
                 label: str(),
-                type: en(['text', 'select', 'checkbox']),
+                type: en(['text', 'select', 'checkbox', 'phone', 'email', 'date', 'time', 'textarea', 'consent']),
                 required: bool(),
                 options: { type: 'array', items: str() },
+                placeholder: str(),
+                helpText: str(),
               }),
             },
+            availability: obj({
+              days: { type: 'array', items: { type: 'integer' } },
+              open: str(),
+              close: str(),
+              slotMinutes: { type: 'integer' },
+              bufferMinutes: { type: 'integer' },
+              blackoutDates: { type: 'array', items: str() },
+            }),
+            guardrails: obj({
+              fallbackMessage: str(),
+              escalationTriggers: { type: 'array', items: str() },
+              restrictedTopics: { type: 'array', items: str() },
+              medicalSafetyMode: bool(),
+            }),
+            widgetAppearance: obj({
+              position: en(['left', 'right']),
+              shape: en(['rounded', 'square', 'circle']),
+              size: en(['compact', 'comfortable']),
+              mode: en(['light', 'dark', 'auto']),
+              greeting: str(),
+              subtitle: str(),
+            }),
             notificationEmail: str({ format: 'email' }),
             notifyOnLead: bool(),
             notifyOnHandoff: bool(),
@@ -399,7 +423,16 @@ const paths: Paths = {
         ...pageParams,
         q('status', en(CONV_STATUSES)),
         q('channel', en(CHANNELS)),
+        q('q', str(), 'Free-text search on conversation title'),
+        q('hasLead', bool(), 'Only conversations with (or without) a linked lead'),
+        q('escalated', bool(), 'Only conversations with an open handoff'),
+        q('assignedTo', str(), 'Assignee user id, or "none" for unassigned'),
+        q('tag', str(), 'Filter by tag'),
+        q('from', str({ format: 'date' }), 'Created after'),
+        q('to', str({ format: 'date' }), 'Created before'),
       ],
+      description:
+        'Rows are enriched with lastMessage (preview), leadId, openHandoff and assignee.',
     }),
     post: op({
       tags: ['Conversations'],
@@ -418,9 +451,17 @@ const paths: Paths = {
     }),
     patch: op({
       tags: ['Conversations'],
-      summary: 'Update conversation status/title',
+      summary: 'Update conversation status/title/assignee/tags',
       parameters: [p('id', 'Conversation ID')],
-      requestBody: json(obj({ status: en(CONV_STATUSES), title: str() }), false),
+      requestBody: json(
+        obj({
+          status: en(CONV_STATUSES),
+          title: str(),
+          assignedTo: str({ format: 'uuid' }),
+          tags: { type: 'array', items: str() },
+        }),
+        false
+      ),
       responses: {
         '200': { description: 'Updated' },
         '400': ERR('Invalid status transition'),
@@ -459,6 +500,7 @@ const paths: Paths = {
         q('category', en(['GENERAL', 'SALES', 'SUPPORT', 'FEEDBACK', 'OTHER'])),
         q('source', str()),
         q('assignedTo', uuid()),
+        q('q', str(), 'Free-text search on name, email, phone, summary'),
       ],
     }),
   },
@@ -496,6 +538,41 @@ const paths: Paths = {
       parameters: [p('id', 'Lead ID')],
       requestBody: json(obj({ body: str({ maxLength: 2000 }) }, ['body'])),
       responses: { '201': { description: 'Created' } },
+    }),
+  },
+
+  // ── Notifications (in-app inbox) ──────────────────────────────────────────
+  '/api/v1/notifications': {
+    get: op({
+      tags: ['Notifications'],
+      summary: 'List in-app notifications for the signed-in user',
+      parameters: [
+        ...pageParams,
+        q('unread', { type: 'boolean' }, 'Only unread notifications'),
+      ],
+    }),
+  },
+  '/api/v1/notifications/unread-count': {
+    get: op({
+      tags: ['Notifications'],
+      summary: 'Unread notification count for the signed-in user',
+    }),
+  },
+  '/api/v1/notifications/read-all': {
+    post: op({
+      tags: ['Notifications'],
+      summary: 'Mark all (or a list of) notifications as read',
+      requestBody: json(
+        obj({ ids: { type: 'array', items: { type: 'string', format: 'uuid' } } }, []),
+        false
+      ),
+    }),
+  },
+  '/api/v1/notifications/{id}/read': {
+    post: op({
+      tags: ['Notifications'],
+      summary: 'Mark a single notification as read',
+      parameters: [p('id', 'Notification ID')],
     }),
   },
 
@@ -1016,6 +1093,16 @@ const paths: Paths = {
         obj({ content: str({ maxLength: 2000 }), clientRequestId: str() }, ['content'])
       ),
       responses: { '201': { description: 'Reply generated' }, '429': ERR('Rate limited') },
+    }),
+  },
+  '/api/v1/public/assist/messages/{id}/feedback': {
+    post: op({
+      tags: ['Public assistant'],
+      summary: 'Rate an assistant message (visitor CSAT)',
+      auth: false,
+      parameters: [p('id', 'Message ID')],
+      requestBody: json(obj({ feedback: en(['up', 'down']) }, [])),
+      responses: { '200': { description: 'Feedback recorded' }, '404': ERR('Message not found') },
     }),
   },
   '/api/v1/public/assist/leads': {

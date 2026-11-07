@@ -56,9 +56,22 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
       organizationId: user.organizationId ?? null,
       roles: Array.from(roleMap.values()),
       permissions: Array.from(perms.values()),
-      platformAccess: user.organizationId == null,
+      platformAccess: user.organizationId == null && !payload.imp,
+      impersonatedBy: payload.imp,
     };
     req.auth = ctx;
+    // Audited view-as: mutations performed under an impersonation token are
+    // logged against the real admin (payload.imp) with the acting user noted.
+    if (payload.imp && req.method !== 'GET' && req.method !== 'HEAD') {
+      const { recordAudit } = await import('../audit/service');
+      void recordAudit({
+        organizationId: ctx.organizationId,
+        actorUserId: payload.imp,
+        action: 'admin.impersonated_action',
+        resourceType: 'request',
+        metadata: { method: req.method, path: req.originalUrl.slice(0, 200), asUser: ctx.userId },
+      });
+    }
     next();
   } catch {
     return res.status(401).json({ error: { code: 'UNAUTHORIZED', message: 'Invalid token' } });

@@ -1,17 +1,27 @@
-import { and, asc, count, desc, eq, inArray, isNull } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, ilike, inArray, isNull, lte, sql } from 'drizzle-orm';
 import { db } from '../../database/client';
 import {
   chatSessions,
   conversations,
   handoffs,
+  leads,
   messages,
   products,
   usageRecords,
+  users,
 } from '../../database/schema/core';
 import { ApiError } from '../../middleware/error';
 import { generateResponse } from '../ai/service';
 import { recordAudit } from '../audit/service';
+import { enforcePlanLimit } from '../products/service';
 import { env } from '../../config/env';
+
+function monthStart() {
+  const d = new Date();
+  d.setUTCDate(1);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
 
 type ConversationStatus = 'ACTIVE' | 'CLOSED' | 'ARCHIVED';
 type ConversationChannel = 'WEB' | 'API';
@@ -100,27 +110,114 @@ export async function listConversations(params: {
   page: number;
   limit: number;
   status?: ConversationStatus;
+  channel?: (typeof conversations.$inferSelect)['channel'];
+  q?: string;
+  hasLead?: boolean;
+  escalated?: boolean;
+  assignedTo?: string;
+  tag?: string;
+  from?: Date;
+  to?: Date;
   order: 'asc' | 'desc';
 }) {
-  const where = params.status
-    ? and(
-        eq(conversations.organizationId, params.organizationId),
-        eq(conversations.status, params.status)
-      )
-    : eq(conversations.organizationId, params.organizationId);
+  const conditions = [eq(conversations.organizationId, params.organizationId)];
+  if (params.status) conditions.push(eq(conversations.status, params.status));
+  if (params.channel) conditions.push(eq(conversations.channel, params.channel));
+  if (params.q) conditions.push(ilike(conversations.title, `%${params.q}%`));
+  if (params.from) conditions.push(gte(conversations.createdAt, params.from));
+  if (params.to) conditions.push(lte(conversations.createdAt, params.to));
+  if (params.assignedTo === 'none') conditions.push(isNull(conversations.assignedTo));
+  else if (params.assignedTo) conditions.push(eq(conversations.assignedTo, params.assignedTo));
+  if (params.tag) conditions.push(sql`${conversations.tags} @> ARRAY[${params.tag}]::text[]`);
+  if (params.hasLead === true) {
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM leads l WHERE l.conversation_id = ${conversations.id})`
+    );
+  } else if (params.hasLead === false) {
+    conditions.push(
+      sql`NOT EXISTS (SELECT 1 FROM leads l WHERE l.conversation_id = ${conversations.id})`
+    );
+  }
+  if (params.escalated === true) {
+    conditions.push(
+      sql`EXISTS (SELECT 1 FROM handoffs h WHERE h.conversation_id = ${conversations.id} AND h.status IN ('REQUESTED','QUEUED','ASSIGNED'))`
+    );
+  }
+  const where = and(...conditions);
 
   const rows = await db
     .select()
     .from(conversations)
     .where(where)
-    .orderBy(params.order === 'asc' ? asc(conversations.createdAt) : desc(conversations.createdAt))
+    .orderBy(params.order === 'asc' ? asc(conversations.updatedAt) : desc(conversations.updatedAt))
     .limit(params.limit)
     .offset((params.page - 1) * params.limit);
 
   const [totalRow] = await db.select({ value: count() }).from(conversations).where(where);
 
+  const ids = rows.map((r) => r.id);
+  const [lastMessages, linkedLeads, openHandoffs, assignees] = ids.length
+    ? await Promise.all([
+        db
+          .selectDistinctOn([messages.conversationId], {
+            conversationId: messages.conversationId,
+            content: messages.content,
+            role: messages.role,
+            createdAt: messages.createdAt,
+          })
+          .from(messages)
+          .where(inArray(messages.conversationId, ids))
+          .orderBy(messages.conversationId, desc(messages.createdAt)),
+        db
+          .select({ conversationId: leads.conversationId, id: leads.id })
+          .from(leads)
+          .where(inArray(leads.conversationId, ids)),
+        db
+          .select({ conversationId: handoffs.conversationId, id: handoffs.id, status: handoffs.status })
+          .from(handoffs)
+          .where(
+            and(
+              inArray(handoffs.conversationId, ids),
+              inArray(handoffs.status, ['REQUESTED', 'QUEUED', 'ASSIGNED'])
+            )
+          ),
+        db
+          .select({ id: users.id, name: users.name })
+          .from(users)
+          .where(
+            inArray(
+              users.id,
+              rows.map((r) => r.assignedTo).filter((v): v is string => !!v)
+            )
+          ),
+      ])
+    : [[], [], [], []];
+
+  const lastByConv = new Map(lastMessages.map((m) => [m.conversationId, m]));
+  const leadByConv = new Map(linkedLeads.map((l) => [l.conversationId, l.id]));
+  const handoffByConv = new Map(openHandoffs.map((h) => [h.conversationId, h]));
+  const assigneeById = new Map(assignees.map((u) => [u.id, u.name]));
+
   return {
-    items: rows.map(mapConversation),
+    items: rows.map((row) => {
+      const last = lastByConv.get(row.id);
+      const openHandoff = handoffByConv.get(row.id);
+      return {
+        ...mapConversation(row),
+        lastMessage: last
+          ? {
+              content: last.content.length > 140 ? `${last.content.slice(0, 140)}…` : last.content,
+              role: last.role,
+              createdAt: last.createdAt,
+            }
+          : null,
+        leadId: leadByConv.get(row.id) ?? null,
+        openHandoff: openHandoff ? { id: openHandoff.id, status: openHandoff.status } : null,
+        assignee: row.assignedTo
+          ? { id: row.assignedTo, name: assigneeById.get(row.assignedTo) ?? null }
+          : null,
+      };
+    }),
     page: params.page,
     limit: params.limit,
     total: Number(totalRow?.value ?? 0),
@@ -154,6 +251,8 @@ export async function updateConversation(params: {
   title?: string;
   status?: ConversationStatus;
   metadata?: Record<string, unknown>;
+  assignedTo?: string | null;
+  tags?: string[];
 }) {
   const existing = await getConversationOrThrow(params.organizationId, params.conversationId);
 
@@ -181,6 +280,8 @@ export async function updateConversation(params: {
     updates.closedAt = params.status === 'CLOSED' ? new Date() : null;
   }
   if (params.metadata) updates.metadata = stringifyMetadata(params.metadata);
+  if (params.assignedTo !== undefined) updates.assignedTo = params.assignedTo;
+  if (params.tags) updates.tags = params.tags;
 
   const [updated] = await db
     .update(conversations)
@@ -212,6 +313,31 @@ export async function updateConversation(params: {
   });
 
   return mapConversation(updated);
+}
+
+/** Visitor CSAT on an assistant message; 'up' | 'down' | null to clear. */
+export async function setMessageFeedback(params: {
+  organizationId: string;
+  conversationId: string;
+  messageId: string;
+  feedback: 'up' | 'down' | null;
+}) {
+  const [updated] = await db
+    .update(messages)
+    .set({ feedback: params.feedback })
+    .where(
+      and(
+        eq(messages.id, params.messageId),
+        eq(messages.conversationId, params.conversationId),
+        eq(messages.organizationId, params.organizationId),
+        eq(messages.role, 'ASSISTANT')
+      )
+    )
+    .returning();
+  if (!updated) {
+    throw new ApiError(404, 'NOT_FOUND', 'Message not found');
+  }
+  return mapMessage(updated);
 }
 
 export async function revokeSessionsForConversation(conversationId: string) {
@@ -326,6 +452,7 @@ async function createAssistantMessage(
     content: params.content,
     clientRequestId: assistantRequestId,
     metadata: JSON.stringify(metadata),
+    grounded: params.grounded,
   });
 
   const rows = await inserted
@@ -383,6 +510,25 @@ export async function createUserMessageAndGenerateAssistant(params: {
   clientRequestId?: string;
   metadata?: Record<string, unknown>;
 }) {
+  // Plan gate: capped plans (e.g. the free trial) get a fixed number of AI
+  // replies per calendar month.
+  const [aiUsed] = await db
+    .select({ value: count() })
+    .from(usageRecords)
+    .where(
+      and(
+        eq(usageRecords.organizationId, params.organizationId),
+        eq(usageRecords.eventType, 'conversation.ai.response'),
+        gte(usageRecords.createdAt, monthStart())
+      )
+    );
+  await enforcePlanLimit(
+    params.organizationId,
+    'maxMonthlyAiMessages',
+    Number(aiUsed?.value ?? 0),
+    'assistant replies this month'
+  );
+
   return db.transaction(async (tx) => {
     const [conversation] = await tx
       .select()

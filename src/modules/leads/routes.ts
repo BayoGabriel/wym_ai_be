@@ -55,6 +55,7 @@ router.get(
       source?: string;
       category?: string;
       assignedTo?: string;
+      q?: string;
       order: 'asc' | 'desc';
     };
 
@@ -66,6 +67,7 @@ router.get(
       source: query.source,
       category: query.category,
       assignedTo: query.assignedTo,
+      q: query.q,
       order: query.order,
     });
     res.json(response);

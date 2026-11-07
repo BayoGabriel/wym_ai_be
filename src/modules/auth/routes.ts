@@ -1,12 +1,20 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { validate } from '../../middleware/validate';
-import { loginSchema, refreshSchema, registerSchema } from './schemas';
+import {
+  forgotPasswordSchema,
+  loginSchema,
+  refreshSchema,
+  registerSchema,
+  resetPasswordSchema,
+} from './schemas';
 import { db } from '../../database/client';
 import { organizations, users, userRoles, roles } from '../../database/schema/core';
 import { eq } from 'drizzle-orm';
 import {
+  createPasswordResetToken,
   hashPassword,
   issueTokens,
+  resetPasswordWithToken,
   revokeRefreshToken,
   rotateRefreshToken,
   verifyAccessToken,
@@ -14,6 +22,9 @@ import {
 } from './service';
 import { authenticate } from './middleware';
 import { newPublicKey } from '../../lib/keys';
+import { getMailTransport } from '../mail/transport';
+import { grantFreeTrial, TRIAL_DAYS } from '../products/service';
+import { env } from '../../config/env';
 
 const router = Router();
 
@@ -62,7 +73,7 @@ router.post('/register', validate(registerSchema), handle(async (req, res) => {
     .where(eq(roles.name, 'Client Administrator'))
     .limit(1);
 
-  const { org, user } = await db.transaction(async (tx) => {
+  const { org, user, trialEndsAt } = await db.transaction(async (tx) => {
     const [org] = await tx
       .insert(organizations)
       .values({ name: organizationName, slug, status: 'active', publicKey: newPublicKey() })
@@ -76,13 +87,16 @@ router.post('/register', validate(registerSchema), handle(async (req, res) => {
         .insert(userRoles)
         .values({ userId: user.id, roleId: role.id, organizationId: org.id });
     }
-    return { org, user };
+    // Every signup starts on the free trial — all products, small usage caps.
+    const trialEndsAt = await grantFreeTrial(tx, org.id);
+    return { org, user, trialEndsAt };
   });
 
   const tokens = await issueTokens({ id: user.id, organizationId: org.id, status: 'active' });
   return res.status(201).json({
     organization: { id: org.id, name: org.name, slug: org.slug },
     user: { id: user.id, email: user.email, name: user.name },
+    trial: { days: TRIAL_DAYS, endsAt: trialEndsAt },
     accessToken: tokens.accessToken,
     refreshToken: tokens.refreshToken,
   });
@@ -158,6 +172,49 @@ router.post('/logout', validate(refreshSchema), handle(async (req, res) => {
   }
 }));
 
+// Always answers 200 regardless of whether the email is registered — the
+// response must not reveal which addresses have accounts.
+router.post('/forgot-password', validate(forgotPasswordSchema), handle(async (req, res) => {
+  const { email } = req.body as { email: string };
+  const [user] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+  if (user) {
+    const token = await createPasswordResetToken(user.id);
+    const resetUrl = `${env.APP_BASE_URL}/reset-password?token=${token}`;
+    const ttlMinutes = env.PASSWORD_RESET_TOKEN_TTL_MINUTES;
+    try {
+      await getMailTransport().send({
+        to: user.email,
+        subject: 'Reset your WymNet password',
+        text: `Hi ${user.name},\n\nWe received a request to reset your password. Open the link below to choose a new one — it expires in ${ttlMinutes} minutes.\n\n${resetUrl}\n\nIf you didn't request this, you can ignore this email; your password won't change.`,
+        html: `<p>Hi ${user.name},</p><p>We received a request to reset your password. Click the link below to choose a new one — it expires in ${ttlMinutes} minutes.</p><p><a href="${resetUrl}">${resetUrl}</a></p><p>If you didn't request this, you can ignore this email; your password won't change.</p>`,
+      });
+    } catch (err) {
+      // Delivery failures are logged but still reported as success to the
+      // caller — surfacing them would leak which addresses are registered.
+      console.error(
+        `[auth] password reset email to ${user.email} failed:`,
+        err instanceof Error ? err.message : err
+      );
+    }
+  }
+  return res.json({ ok: true });
+}));
+
+router.post('/reset-password', validate(resetPasswordSchema), handle(async (req, res) => {
+  const { token, password } = req.body as { token: string; password: string };
+  try {
+    await resetPasswordWithToken(token, password);
+  } catch {
+    return res.status(400).json({
+      error: {
+        code: 'INVALID_RESET_TOKEN',
+        message: 'This reset link is invalid or has expired. Request a new one.',
+      },
+    });
+  }
+  return res.json({ ok: true });
+}));
+
 router.get('/me', authenticate, handle(async (req, res) => {
   const auth = req.auth;
   const [user] = await db.select().from(users).where(eq(users.id, auth.userId)).limit(1);
@@ -171,6 +228,7 @@ router.get('/me', authenticate, handle(async (req, res) => {
     organizationId: auth.organizationId,
     roles: auth.roles,
     permissions: auth.permissions,
+    impersonatedBy: auth.impersonatedBy ?? null,
     platformAccess: auth.platformAccess,
   });
 }));

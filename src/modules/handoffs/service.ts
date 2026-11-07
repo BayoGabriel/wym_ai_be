@@ -158,10 +158,73 @@ export async function requestHandoffFromPublicSession(params: {
       text: params.reason
         ? `A visitor asked for human assistance: ${params.reason}`
         : 'A visitor asked for human assistance during a chat.',
+      link: `/dashboard/assist/handoffs/${handoff.id}`,
     });
   }
 
   return { handoff, existing };
+}
+
+/** Staff-initiated takeover: creates a handoff already assigned to the caller,
+ *  so the AI pauses and replies go through /handoffs/:id/replies. */
+export async function createStaffHandoff(params: {
+  organizationId: string;
+  userId: string;
+  conversationId: string;
+  reason?: string;
+}) {
+  const active = await findActiveHandoffForConversation(db, params.conversationId);
+  if (active) {
+    // Already escalated — claim it for the caller if still unassigned.
+    if (!active.assignedTo) {
+      return claimHandoff({
+        organizationId: params.organizationId,
+        userId: params.userId,
+        handoffId: active.id,
+      });
+    }
+    if (active.assignedTo === params.userId) return getHandoffById(params.organizationId, active.id);
+    throw new ApiError(409, 'ALREADY_ASSIGNED', 'Handoff is assigned to another agent');
+  }
+
+  const [conversation] = await db
+    .select({ id: conversations.id, status: conversations.status })
+    .from(conversations)
+    .where(
+      and(
+        eq(conversations.id, params.conversationId),
+        eq(conversations.organizationId, params.organizationId)
+      )
+    )
+    .limit(1);
+  if (!conversation) throw new ApiError(404, 'NOT_FOUND', 'Conversation not found');
+  if (conversation.status !== 'ACTIVE') {
+    throw new ApiError(409, 'CONVERSATION_READ_ONLY', 'Conversation is not active');
+  }
+
+  const [created] = await db
+    .insert(handoffs)
+    .values({
+      organizationId: params.organizationId,
+      conversationId: params.conversationId,
+      status: 'ASSIGNED',
+      requestedBy: 'STAFF',
+      reason: params.reason ?? 'Staff takeover',
+      assignedTo: params.userId,
+      assignedAt: new Date(),
+    })
+    .returning();
+
+  await recordAudit({
+    organizationId: params.organizationId,
+    actorUserId: params.userId,
+    action: 'handoff.staff_takeover',
+    resourceType: 'handoff',
+    resourceId: created.id,
+    metadata: { conversationId: params.conversationId },
+  });
+
+  return getHandoffById(params.organizationId, created.id);
 }
 
 export async function getPublicHandoffStatus(params: {

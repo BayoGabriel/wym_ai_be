@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'crypto';
-import { and, eq } from 'drizzle-orm';
+import { and, count, eq, gte } from 'drizzle-orm';
 import { db } from '../../database/client';
 import {
   assistantConfigurations,
@@ -13,7 +13,14 @@ import { parseIntakeFields } from '../leads/service';
 import { env } from '../../config/env';
 import { ApiError } from '../../middleware/error';
 import { recordAudit } from '../audit/service';
-import { organizationHasProduct } from '../products/service';
+import { enforcePlanLimit, organizationHasProduct } from '../products/service';
+
+function monthStart() {
+  const d = new Date();
+  d.setUTCDate(1);
+  d.setUTCHours(0, 0, 0, 0);
+  return d;
+}
 
 export type PublicSessionContext = {
   sessionId: string;
@@ -22,7 +29,7 @@ export type PublicSessionContext = {
   expiresAt: Date;
 };
 
-function hashSessionToken(token: string) {
+export function hashSessionToken(token: string) {
   return createHash('sha256').update(token).digest('hex');
 }
 
@@ -125,6 +132,20 @@ export async function createPublicChatSession(params: {
     allowedOrigins: parseOrigins(config.allowedOrigins),
     origin: params.origin,
   });
+
+  // Plan gate: capped plans get a fixed number of new conversations per month.
+  const [conversationsThisMonth] = await db
+    .select({ value: count() })
+    .from(conversations)
+    .where(
+      and(eq(conversations.organizationId, org.id), gte(conversations.createdAt, monthStart()))
+    );
+  await enforcePlanLimit(
+    org.id,
+    'maxMonthlyConversations',
+    Number(conversationsThisMonth?.value ?? 0),
+    'conversations this month'
+  );
 
   const token = generateSessionToken();
   const expiresAt = new Date(Date.now() + env.PUBLIC_CHAT_SESSION_TTL_HOURS * 60 * 60 * 1000);
@@ -238,6 +259,8 @@ export async function getPublicAssistantConfig(params: {
       escalation: config.escalationEnabled,
       appointments: config.appointmentRequestsEnabled,
     },
+    availability: config.availability ?? null,
+    widgetAppearance: config.widgetAppearance ?? null,
     intakeFields: parseIntakeFields(config.intakeFields),
   };
 }
@@ -355,7 +378,8 @@ export function toPublicMessage(row: MessageRow) {
   if (row.role !== 'ASSISTANT') return base;
   return {
     ...base,
-    grounded: !!metadata?.grounded,
+    grounded: row.grounded ?? !!metadata?.grounded,
     sources: Array.isArray(metadata?.sources) ? metadata.sources : [],
+    feedback: row.feedback ?? null,
   };
 }

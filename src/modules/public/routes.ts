@@ -31,7 +31,9 @@ import {
   createUserMessageAndGenerateAssistant,
   getConversationOrThrow,
   listConversationMessages,
+  setMessageFeedback,
 } from '../conversations/service';
+import { messageFeedbackSchema } from '../conversations/schemas';
 import { authenticatePublicSession, PublicSessionRequest } from './middleware';
 import { PostgresRateLimitStore } from './rateLimitStore';
 
@@ -216,6 +218,26 @@ router.get(
       limit: response.limit,
       total: response.total,
     });
+  })
+);
+
+// Visitor CSAT on an assistant message. The session pins the conversation, so
+// feedback can only land on messages in the visitor's own thread.
+router.post(
+  '/messages/:id/feedback',
+  authenticatePublicSession,
+  readLimiter,
+  validate(messageFeedbackSchema),
+  handle(async (req, res) => {
+    const ctx = sessionOf(req);
+    const body = req.body as { feedback: 'up' | 'down' | null };
+    const updated = await setMessageFeedback({
+      organizationId: ctx.organizationId,
+      conversationId: ctx.conversationId,
+      messageId: req.params.id,
+      feedback: body.feedback,
+    });
+    res.json(toPublicMessage(updated));
   })
 );
 

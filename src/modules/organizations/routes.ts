@@ -6,6 +6,7 @@ import {
   createOrganization,
   getOrganization,
   listOrganizationProducts,
+  listOrganizationAuditEvents,
   listOrganizationSubscriptions,
   listOrganizations,
   rotateWidgetKey,
@@ -18,6 +19,7 @@ router.get('/', authenticate, listOrganizations);
 router.get('/:id', authenticate, getOrganization);
 router.get('/:id/products', authenticate, listOrganizationProducts);
 router.get('/:id/subscriptions', authenticate, listOrganizationSubscriptions);
+router.get('/:id/audit-events', authenticate, listOrganizationAuditEvents);
 router.post('/', authenticate, validate(createOrganizationSchema), createOrganization);
 router.post('/:id/widget-key/rotate', authenticate, rotateWidgetKey);
 router.patch('/:id', authenticate, validate(updateOrganizationSchema), updateOrganization);

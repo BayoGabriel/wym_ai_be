@@ -280,6 +280,7 @@ export async function submitInstance(params: {
     event: 'flow.instance.submitted',
     subject: `New ${definition.name} submission: ${params.title}`,
     text: `A new "${definition.name}" submission (${params.title}) is waiting for step "${steps[0]?.name}".`,
+    link: `/dashboard/flow/instances/${instance.id}`,
   });
   void recordFlowUsage(params.organizationId, 'instance_submitted');
   return instance;
@@ -522,6 +523,7 @@ export async function decideTask(params: {
       event: 'flow.step.advanced',
       subject: `${definition.name}: "${instance.title}" moved to ${steps[nextIndex]?.name}`,
       text: `Submission "${instance.title}" was approved at step ${task.stepIndex + 1} and now awaits "${steps[nextIndex]?.name}".`,
+      link: `/dashboard/flow/instances/${instance.id}`,
     });
   }
 
@@ -605,6 +607,7 @@ export async function dispatchReminders(olderThanHours = 24) {
       event: 'flow.task.reminder',
       subject: `Reminder: "${task.title}" is still pending`,
       text: `The approval step "${task.title}" for submission "${instance?.title ?? task.instanceId}" has been waiting since ${task.createdAt.toISOString()}.`,
+      link: '/dashboard/flow/tasks',
     });
     await db.update(flowTasks).set({ reminderSentAt: new Date() }).where(eq(flowTasks.id, task.id));
     sent++;

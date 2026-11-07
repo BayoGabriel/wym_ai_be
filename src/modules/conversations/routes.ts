@@ -77,19 +77,35 @@ router.get(
     requirePermission(auth, 'conversation.read');
     await ensureAssistEntitlement(auth);
 
-    const { page, limit, status, order } = req.query as unknown as {
+    const query = req.query as unknown as {
       page: number;
       limit: number;
       status?: 'ACTIVE' | 'CLOSED' | 'ARCHIVED';
+      channel?: 'WEB' | 'API' | 'WHATSAPP' | 'MESSENGER' | 'INSTAGRAM' | 'TELEGRAM' | 'EMAIL';
+      q?: string;
+      hasLead?: boolean;
+      escalated?: boolean;
+      assignedTo?: string;
+      tag?: string;
+      from?: string;
+      to?: string;
       order: 'asc' | 'desc';
     };
 
     const response = await listConversations({
       organizationId: auth.organizationId!,
-      page,
-      limit,
-      status,
-      order,
+      page: query.page,
+      limit: query.limit,
+      status: query.status,
+      channel: query.channel,
+      q: query.q,
+      hasLead: query.hasLead,
+      escalated: query.escalated,
+      assignedTo: query.assignedTo,
+      tag: query.tag,
+      from: query.from ? new Date(query.from) : undefined,
+      to: query.to ? new Date(query.to) : undefined,
+      order: query.order,
     });
     res.json(response);
   })
@@ -119,6 +135,8 @@ router.patch(
       title?: string;
       status?: 'ACTIVE' | 'CLOSED' | 'ARCHIVED';
       metadata?: Record<string, unknown>;
+      assignedTo?: string | null;
+      tags?: string[];
     };
 
     const conversation = await updateConversation({
@@ -128,6 +146,8 @@ router.patch(
       title: body.title,
       status: body.status,
       metadata: body.metadata,
+      assignedTo: body.assignedTo,
+      tags: body.tags,
     });
     res.json(conversation);
   })

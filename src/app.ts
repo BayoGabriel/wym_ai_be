@@ -24,6 +24,8 @@ import reportRoutes from './modules/reports/routes';
 import insightRoutes from './modules/insight/routes';
 import flowRoutes from './modules/flow/routes';
 import adminRoutes from './modules/admin/routes';
+import notificationRoutes from './modules/notifications/routes';
+import meRoutes from './modules/me/routes';
 import publicAssistRoutes from './modules/public/routes';
 import channelWebhookRoutes from './modules/channels/routes';
 import swaggerUi from 'swagger-ui-express';
@@ -107,6 +109,8 @@ export function createApp() {
   app.use('/api/v1', reportRoutes);
   app.use('/api/v1', insightRoutes);
   app.use('/api/v1', flowRoutes);
+  app.use('/api/v1', notificationRoutes);
+  app.use('/api/v1', meRoutes);
   app.use('/api/v1/admin', adminRoutes);
 
   app.use(notFoundHandler);

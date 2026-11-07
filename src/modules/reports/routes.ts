@@ -48,4 +48,49 @@ router.get(
   })
 );
 
+const scheduleSchema = z.object({
+  frequency: z.enum(['daily', 'weekly', 'monthly']).default('weekly'),
+  recipients: z.array(z.string().email()).min(1).max(10),
+});
+
+router.get(
+  '/reports/schedules',
+  handle(async (req, res) => {
+    const auth = (req as unknown as { auth: AuthContext }).auth;
+    requirePermission(auth, 'report.read');
+    const { listSchedules } = await import('./schedules');
+    res.json({ items: await listSchedules(auth.organizationId!) });
+  })
+);
+
+router.post(
+  '/reports/schedules',
+  validate(scheduleSchema),
+  handle(async (req, res) => {
+    const auth = (req as unknown as { auth: AuthContext }).auth;
+    requirePermission(auth, 'report.read');
+    const { createSchedule } = await import('./schedules');
+    const body = req.body as { frequency: string; recipients: string[] };
+    res.status(201).json(
+      await createSchedule({
+        organizationId: auth.organizationId!,
+        createdBy: auth.userId,
+        frequency: body.frequency,
+        recipients: body.recipients,
+      })
+    );
+  })
+);
+
+router.delete(
+  '/reports/schedules/:id',
+  handle(async (req, res) => {
+    const auth = (req as unknown as { auth: AuthContext }).auth;
+    requirePermission(auth, 'report.read');
+    const { deleteSchedule } = await import('./schedules');
+    await deleteSchedule(auth.organizationId!, req.params.id);
+    res.status(204).send();
+  })
+);
+
 export default router;

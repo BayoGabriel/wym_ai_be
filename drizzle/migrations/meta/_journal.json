@@ -106,6 +106,41 @@
       "when": 1793543652183,
       "tag": "0014_condemned_penance",
       "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1793954620871,
+      "tag": "0015_deep_maddog",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1793958110888,
+      "tag": "0016_pale_black_cat",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1793960518172,
+      "tag": "0017_password_reset",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1793960600000,
+      "tag": "0018_billing_reports",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1793961000000,
+      "tag": "0019_admin_phase6",
+      "breakpoints": true
     }
   ]
 }

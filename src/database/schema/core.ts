@@ -31,6 +31,11 @@ export const knowledgeCategoryEnum = pgEnum('knowledge_category', [
   'EVENTS',
   'FEATURES',
   'GENERAL',
+  'COMPANY_INFO',
+  'SERVICES',
+  'POLICIES',
+  'PRICING',
+  'PROCEDURES',
 ]);
 export const processingStatusEnum = pgEnum('processing_status', [
   'PENDING',
@@ -104,6 +109,9 @@ export const organizations = pgTable('organizations', {
   // human-meaningful; this key is what sites embed. Revocable without renaming.
   publicKey: varchar('public_key', { length: 64 }).unique(),
   status: orgStatusEnum('status').notNull().default('pending'),
+  // Autosaved onboarding wizard state for the platform team — cleared when
+  // registration completes.
+  onboardingDraft: text('onboarding_draft'),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
@@ -115,8 +123,34 @@ export const users = pgTable('users', {
   name: varchar('name', { length: 255 }).notNull(),
   status: userStatusEnum('status').notNull().default('active'),
   organizationId: uuid('organization_id').references(() => organizations.id),
+  department: varchar('department', { length: 120 }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const userPreferences = pgTable('user_preferences', {
+  userId: uuid('user_id')
+    .references(() => users.id)
+    .primaryKey(),
+  organizationId: uuid('organization_id').references(() => organizations.id),
+  notifyEmail: text('notify_email').notNull().default('{}'),
+  notifyInApp: text('notify_in_app').notNull().default('{}'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
+export const reportSchedules = pgTable('report_schedules', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  organizationId: uuid('organization_id')
+    .references(() => organizations.id)
+    .notNull(),
+  createdBy: uuid('created_by')
+    .references(() => users.id)
+    .notNull(),
+  frequency: varchar('frequency', { length: 20 }).notNull().default('weekly'),
+  recipients: text('recipients').notNull().default('[]'),
+  lastSentAt: timestamp('last_sent_at', { withTimezone: true }),
+  enabled: boolean('enabled').notNull().default(true),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
 export const roles = pgTable('roles', {
@@ -222,6 +256,16 @@ export const assistantConfigurations = pgTable('assistant_configurations', {
   // Org-defined extra intake fields collected during lead capture
   // (array of { key, label, type: 'text'|'select'|'checkbox', required, options? }).
   intakeFields: jsonb('intake_fields'),
+  // Structured booking rules consumed by the appointments UI and validated on
+  // public requests: { days: number[], open, close, slotMinutes,
+  // bufferMinutes, blackoutDates: string[] }.
+  availability: jsonb('availability'),
+  // Studio guardrails: { fallbackMessage, escalationTriggers[], restrictedTopics[],
+  // medicalSafetyMode }.
+  guardrails: jsonb('guardrails'),
+  // Widget appearance: { position, shape, size, mode, greeting, subtitle } —
+  // rendered by the /widget bundle and previewed in Studio.
+  widgetAppearance: jsonb('widget_appearance'),
   // Notification routing for staff alerts (lead/handoff/appointment events).
   notificationEmail: varchar('notification_email', { length: 255 }),
   notifyOnLead: boolean('notify_on_lead').notNull().default(false),
@@ -306,6 +350,18 @@ export const knowledgeChunks = pgTable('knowledge_chunks', {
   updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
 });
 
+export const plans = pgTable('plans', {
+  id: uuid('id').primaryKey().defaultRandom(),
+  code: varchar('code', { length: 50 }).notNull().unique(),
+  name: varchar('name', { length: 120 }).notNull(),
+  monthlyPriceCents: integer('monthly_price_cents').notNull().default(0),
+  maxSeats: integer('max_seats'),
+  maxKnowledgeItems: integer('max_knowledge_items'),
+  maxMonthlyConversations: integer('max_monthly_conversations'),
+  maxMonthlyAiMessages: integer('max_monthly_ai_messages'),
+  createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+});
+
 export const subscriptions = pgTable('subscriptions', {
   id: uuid('id').primaryKey().defaultRandom(),
   organizationId: uuid('organization_id')
@@ -314,7 +370,9 @@ export const subscriptions = pgTable('subscriptions', {
   productId: uuid('product_id')
     .references(() => products.id)
     .notNull(),
+  planId: uuid('plan_id').references(() => plans.id),
   status: subscriptionStatusEnum('status').notNull().default('trialing'),
+  trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
   startAt: timestamp('start_at', { withTimezone: true }).notNull().defaultNow(),
   endAt: timestamp('end_at', { withTimezone: true }),
   createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
@@ -345,6 +403,8 @@ export const conversations = pgTable(
     externalSessionId: varchar('external_session_id', { length: 255 }),
     title: varchar('title', { length: 255 }),
     metadata: text('metadata'),
+    assignedTo: uuid('assigned_to').references(() => users.id),
+    tags: text('tags').array(),
     closedAt: timestamp('closed_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
@@ -359,11 +419,55 @@ export const conversations = pgTable(
   })
 );
 
+export const passwordResetTokens = pgTable(
+  'password_reset_tokens',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    userId: uuid('user_id')
+      .references(() => users.id)
+      .notNull(),
+    tokenHash: varchar('token_hash', { length: 255 }).notNull(),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    usedAt: timestamp('used_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    user_idx: index('password_reset_tokens_user_idx').on(t.userId),
+    token_hash_idx: index('password_reset_tokens_token_hash_idx').on(t.tokenHash),
+  })
+);
+
 export const rateLimitBuckets = pgTable('rate_limit_buckets', {
   key: varchar('key', { length: 512 }).primaryKey(),
   hits: integer('hits').notNull().default(0),
   expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
 });
+
+// In-app notifications shown in the dashboard bell. Email delivery stays in
+// the notifications module; these rows power the per-user inbox.
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    organizationId: uuid('organization_id')
+      .references(() => organizations.id)
+      .notNull(),
+    userId: uuid('user_id')
+      .references(() => users.id)
+      .notNull(),
+    event: varchar('event', { length: 128 }).notNull(),
+    title: varchar('title', { length: 255 }).notNull(),
+    body: text('body'),
+    link: varchar('link', { length: 512 }),
+    readAt: timestamp('read_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => ({
+    user_read_idx: index('notifications_user_read_idx').on(t.userId, t.readAt),
+    user_created_idx: index('notifications_user_created_idx').on(t.userId, t.createdAt),
+    org_idx: index('notifications_org_idx').on(t.organizationId),
+  })
+);
 
 export const chatSessions = pgTable(
   'chat_sessions',
@@ -518,6 +622,10 @@ export const messages = pgTable(
     content: text('content').notNull(),
     clientRequestId: varchar('client_request_id', { length: 128 }),
     metadata: text('metadata'),
+    // Denormalized from metadata.grounded for indexable gap queries; CSAT is
+    // 'up' | 'down' | null, set by the visitor through the public endpoint.
+    grounded: boolean('grounded'),
+    feedback: varchar('feedback', { length: 16 }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => ({

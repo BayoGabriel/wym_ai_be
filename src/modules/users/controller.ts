@@ -1,10 +1,11 @@
 import { Request, Response } from 'express';
 import { db } from '../../database/client';
 import { roles, userRoles, users } from '../../database/schema/core';
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, count, eq, inArray } from 'drizzle-orm';
 import { ApiError } from '../../middleware/error';
 import { requirePermission } from '../rbac/authz';
 import { hashPassword } from '../auth/service';
+import { enforcePlanLimit } from '../products/service';
 import { recordAudit } from '../audit/service';
 import { AuthContext } from '../../types/auth';
 
@@ -49,6 +50,7 @@ function publicUser(u: typeof users.$inferSelect, roleNames: string[] = []) {
     name: u.name,
     status: u.status,
     organizationId: u.organizationId,
+    department: u.department ?? null,
     createdAt: u.createdAt,
     updatedAt: u.updatedAt,
     roles: roleNames,
@@ -108,6 +110,15 @@ export async function createUser(req: Request, res: Response) {
       .status(409)
       .json({ error: { code: 'EMAIL_EXISTS', message: 'Email already registered' } });
 
+  // Plan gate: capped plans (e.g. the free trial) limit team size.
+  if (targetOrgId) {
+    const [seats] = await db
+      .select({ value: count() })
+      .from(users)
+      .where(eq(users.organizationId, targetOrgId));
+    await enforcePlanLimit(targetOrgId, 'maxSeats', Number(seats?.value ?? 0), 'team members');
+  }
+
   const passwordHash = await hashPassword(body.password);
   const [user] = await db
     .insert(users)
@@ -149,10 +160,12 @@ export async function updateUser(req: Request, res: Response) {
     password: string;
     status: 'active' | 'suspended';
     roleName: string | null;
+    department: string | null;
   }>;
   const updates: Partial<typeof users.$inferInsert> = {};
   if (body.name) updates.name = body.name;
   if (body.status) updates.status = body.status;
+  if (body.department !== undefined) updates.department = body.department;
   if (body.password) updates.passwordHash = await hashPassword(body.password);
   const [user] = await db.update(users).set(updates).where(eq(users.id, id)).returning();
 
